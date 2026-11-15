@@ -101,6 +101,24 @@ zero-copy pinned memory, MTP-драфтинг (ускорение ~1.6–1.8x), 
 (llama.cpp + свои abliterated GGUF до 14B + готовые MoE-кванты с выгрузкой)
 остаётся оптимальным.
 
+### 2.2. Strata: установлено и опробовано (16.11.2026)
+
+По запросу пользователя Strata стала **основным движком для пентест-направления**.
+
+- Terminal 0.1.60.1 установлен (`C:\Users\rmari\AppData\Local\Strata\terminal\current\bin\strata.cmd`;
+  в новых терминалах команда `strata` доступна сразу). Клон репозитория —
+  `G:\Work\OAI\strata\` (в git не включён, это внешний проект).
+- Strata считает память как RAM+VRAM вместе: наша машина — 31+16=47 ГБ → «40 ГБ tier».
+- `strata launch --plan` проверен:
+  - `--family coder --model iq1_m` (Flash-Next Coder): скачивание 63.6 ГБ, влезает;
+  - `--family qwen36`: план выдал «модель уже на компьютере» — файлов нет,
+    похоже на ошибку отображения плана (помечено как неподтверждённое).
+- **Выбранный пентест-стек**: heretic-GGUF `llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved`
+  (Q4_K_M, 21.8 ГБ) через `strata launch --model-path` — abliterated + семейство,
+  нативно поддерживаемое Strata + сохранённые MTP-слои для драфтинга.
+  План Б: тот же файл через `scripts/serve.sh` (llama.cpp).
+- Мультимодальность не нужна: везде `--vision off`, mmproj не скачиваем.
+
 ## 3. Бюджет памяти (16 ГБ VRAM)
 
 Правило: веса GGUF + 1.5–3 ГБ под KV-кэш и систему ≤ 15 ГБ.

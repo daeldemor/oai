@@ -22,26 +22,39 @@
 | `scripts/setup.sh` | venv + зависимости (нужен для evaluate.py) |
 | `scripts/abliterate.py`, `scripts/quantize.sh` | Опционально: своя аблитерация через Heretic |
 
-## Быстрый старт
+## Быстрый старт (пентест-направление, движок Strata)
+
+Основной стек: **heretic Qwen3.6-35B-A3B (MoE) на движке Strata** —
+OpenAI/Anthropic-совместимый API на `http://127.0.0.1:8080`.
 
 ```bash
 cd /g/Work/OAI
 
-# 1. Скачать готовую модель (кладётся в каталог LM Studio —
-#    сразу видна в LM Studio и Bionic):
-bash scripts/download.sh mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF Q5_K_M
+# 1. Модель уже скачивается/скачана в models/qwen36-heretic/ (Q4_K_M, 21.8 ГБ)
 
-# 2а. GUI-путь: открыть LM Studio или Bionic и выбрать модель — готово.
-# 2б. API-путь: поднять OpenAI-совместимый сервер на :8080
-bash scripts/serve.sh "C:\Users\rmari\.lmstudio\models\mradermacher\gemma-4-12B-it-uncensored-heretic-GGUF\<файл>.gguf"
+# 2. Запуск через Strata (в новом терминале команда доступна как `strata`):
+strata launch --model-path "G:\Work\OAI\models\qwen36-heretic" \
+  --vision off --yes --no-tui
 
-# 3. Проверить отказы и качество (нужен setup.sh один раз):
+# 2б. План Б — через llama.cpp (если Strata не примет сторонний GGUF):
+bash scripts/serve.sh "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+
+# 3. Проверка отказов и качества:
 bash scripts/setup.sh && source .venv/Scripts/activate
 python scripts/evaluate.py --base http://localhost:1234/v1 --ablated http://localhost:8080/v1
+# (base — Gemma 26B heretic в LM Studio как эталон)
 ```
 
-Что качать в первую очередь — см. `configs/models.yaml`
-(приоритет 1: `gemma-4-12B-it-uncensored-heretic` — полностью влезает в VRAM).
+Запасные варианты под пентест (через `scripts/download.sh`):
+`pentest_priority` в `configs/models.yaml` — кодерская DavidAU Qwen3.8-27B
+и reasoning DeepSeek-V4-Pro-9B.
+
+### GUI-вариант (без пентест-специфики)
+
+```bash
+bash scripts/download.sh mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF Q5_K_M
+# дальше модель видна в LM Studio и Bionic
+```
 
 ## Продвинутый путь (опционально): своя аблитерация
 

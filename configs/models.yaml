@@ -4,6 +4,31 @@
 # fit: full = целиком в VRAM; tight = впритык (KV квантовать, ctx<=16k);
 #      offload = часть слоёв в RAM (9800X3D вытянет, скорость ниже).
 
+# Направление: ПЕНТЕСТ (код, анализ уязвимостей, CTF, лаборатории).
+# Мультимодальность (картинки) не нужна — mmproj-файлы не скачиваем,
+# в Strata всегда --vision off.
+pentest_setup:
+  primary:
+    engine: strata
+    model: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF
+    quant: Q4_K_M  # 21.8 ГБ
+    why: >
+      Abliterated (нет отказов на security-запросы) + семейство Qwen3.6-35B-A3B
+      нативно поддерживается Strata + MTP-слои сохранены (драфтинг = скорость).
+      Запуск: strata launch --model-path <папка с gguf> --vision off
+    risk: >
+      Сторонний GGUF в Strata не гарантирован (официально — свои пакеты).
+      План Б: тот же файл через scripts/serve.sh (llama.cpp) —
+      семейство поддерживает MTP-драфтинг и там.
+  strata_stock_alternative:
+    model: Qwen3.8-Flash-Next Coder IQ1_M (через strata launch --family coder --model iq1_m)
+    download_gb: 63.6
+    why: Лучшее качество кода, что влезает в 32 ГБ RAM под Strata; стоковая модель —
+         на жёстких запросах возможны отказы (рамки: authorized lab / CTF / own infra).
+  notes: >
+    Uncensored-вариант Flash-Next (OrcaRouter, IQ3_XXS, ручная конвертация)
+    требует ~47 ГБ — только после апгрейда RAM до 64 ГБ.
+
 ready_gguf:
   - repo: mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF
     size_b: 12
@@ -28,8 +53,10 @@ ready_gguf:
     quant: Q6_K
     fit_vram_gb: 7.5
     fit: full
-    strengths: [рассуждения, анализ]
+    strengths: [рассуждения, анализ, код]
     priority: 3
+    pentest_priority: 2
+    notes: Быстрый reasoning-движок для разбора уязвимостей; целиком в VRAM.
 
   - repo: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF
     size_b: 35
@@ -68,9 +95,13 @@ ready_gguf:
     quant: IQ4_XS
     fit_vram_gb: 14.5
     fit: tight
-    strengths: [код]
+    strengths: [код, реверс, эксплойт-анализ]
     priority: 6
-    notes: Популярный кодерский вариант; впритык — KV квантовать обязательно.
+    pentest_priority: 1
+    notes: >
+      Пентест-вариант для llama.cpp (если Strata не примет сторонний GGUF):
+      кодерская heretic-сборка с MTP. Впритык — KV квантовать обязательно
+      (scripts/serve.sh уже ставит q8_0).
 
 sources:
   - mradermacher — крупнейший каталог heretic-GGUF (73k+ репозиториев)
