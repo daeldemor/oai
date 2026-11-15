@@ -1,0 +1,9 @@
+.venv/
+models/
+*.gguf
+*.safetensors
+*.bin
+__pycache__/
+*.pyc
+logs/
+llama.cpp/

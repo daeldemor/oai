@@ -1,0 +1,13 @@
+# Аблитерация
+heretic-llm>=1.1.0
+transformers>=4.46
+torch>=2.5
+accelerate>=1.0
+optuna>=4.0
+datasets>=3.0
+
+# Утилиты
+huggingface_hub[cli]>=0.26
+pyyaml>=6.0
+requests>=2.32
+tqdm>=4.66

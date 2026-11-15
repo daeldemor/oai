@@ -1,0 +1,83 @@
+# Каталог ГОТОВЫХ abliterated/heretic GGUF под RTX 5070 Ti (16 ГБ VRAM) + 32 ГБ RAM.
+# Источник: huggingface.co/models?search=heretic+GGUF (по скачиваниям, 16.11.2026).
+# fit_vram_gb: вес кванта в VRAM; бюджет — до ~14.5 ГБ (остаток под KV-кэш).
+# fit: full = целиком в VRAM; tight = впритык (KV квантовать, ctx<=16k);
+#      offload = часть слоёв в RAM (9800X3D вытянет, скорость ниже).
+
+ready_gguf:
+  - repo: mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF
+    size_b: 12
+    quant: Q5_K_M
+    fit_vram_gb: 8.5
+    fit: full
+    strengths: [диалоги, стиль, универсал]
+    priority: 1
+    notes: Лучший первый кандидат — полностью в VRAM, контекст 32k+.
+
+  - repo: DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF
+    size_b: 9
+    quant: Q6_K
+    fit_vram_gb: 7.5
+    fit: full
+    strengths: [креатив, код, русский]
+    priority: 2
+    notes: Самая скачиваемая heretic-модель; MTP-версия генерирует быстрее.
+
+  - repo: mradermacher/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic-GGUF
+    size_b: 9
+    quant: Q6_K
+    fit_vram_gb: 7.5
+    fit: full
+    strengths: [рассуждения, анализ]
+    priority: 3
+
+  - repo: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF
+    size_b: 35
+    type: moe
+    quant: Q4_K_M
+    fit_vram_gb: 19.0
+    fit: offload
+    strengths: [скорость MoE ~3B активных, код]
+    priority: 4
+    notes: >
+      Семейство Qwen3.6-35B-A3B поддерживается движком Strata — при желании
+      можно попробовать его вместо llama.cpp (порт 8080 занять один).
+      Через llama.cpp: --n-gpu-layers подобрать, остаток уйдёт в RAM.
+
+  - repo: mradermacher/gemma-4-26B-A4B-it-heretic-GGUF
+    size_b: 26
+    type: moe
+    quant: IQ4_XS
+    fit_vram_gb: 14.0
+    fit: tight
+    strengths: [универсал]
+    priority: 0
+    notes: УЖЕ УСТАНОВЛЕНА. Контекст <=16k, KV-кэш q8_0.
+
+  - repo: mradermacher/gemma-4-31B-it-ARA-heretic-GGUF
+    size_b: 31
+    quant: IQ4_XS
+    fit_vram_gb: 16.5
+    fit: offload
+    strengths: [качество ответов]
+    priority: 5
+    notes: Только с частичной выгрузкой в RAM; брать если 26B-A4B понравится.
+
+  - repo: DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF
+    size_b: 27
+    quant: IQ4_XS
+    fit_vram_gb: 14.5
+    fit: tight
+    strengths: [код]
+    priority: 6
+    notes: Популярный кодерский вариант; впритык — KV квантовать обязательно.
+
+sources:
+  - mradermacher — крупнейший каталог heretic-GGUF (73k+ репозиториев)
+  - DavidAU — авторские «NEO/IMATRIX/MTP» сборки, высокие скачивания
+  - llmfan46, 0bserverx, jegreene, culturerevolt — heretic/abliterated новинок
+
+already_installed:
+  - path: C:\Users\rmari\.lmstudio\models\mradermacher\gemma-4-26B-A4B-it-heretic-GGUF
+    file: gemma-4-26B-A4B-it-heretic.IQ4_XS.gguf
+    size_gb: 14.0
