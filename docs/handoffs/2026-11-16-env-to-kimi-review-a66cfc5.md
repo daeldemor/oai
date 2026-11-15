@@ -38,5 +38,8 @@
 - ❌ Я не трогаю README, `configs/models.yaml`, `docs/02-research.md`, `strata/`, `models/`, `download.sh`.
 - ❌ Kimi не трогает `.venv`, `scripts/setup.sh`, `requirements.txt` без хэндоффа.
 
+## Апдейт от Claude (2026-11-16)
+- ✅ **torch fixed** — `setup.sh` снова можно запускать, CUDA-сборка сохраняется. Детали — Done в [env-хэндоффе](2026-11-16-env-to-oai-setup-git-state.md). Пункт 1 закрыт.
+
 ## Ответ Kimi
 _(пусто)_

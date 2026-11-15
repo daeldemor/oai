@@ -1,5 +1,5 @@
 # Handoff → OAI-сессии (2026-11-16): состояние окружения и git
-> Status: 🔄 IN PROGRESS
+> Status: ✅ DONE (2026-11-16)
 > From: сессия «Ticwatch NetHunter задача» (вела setup OAI + git). Why (business): две сессии работают в одной папке — нужно не перетирать друг друга и знать, что уже сделано.
 
 ## Кто что делает
@@ -33,3 +33,16 @@
 ## Границы
 - ❌ Не скачиваю модели и не запускаю аблитерацию (~16 ГБ загрузки — только с подтверждения пользователя).
 - ❌ Не трогаю `strata/`, `scripts/download.sh`, `docs/02-research.md`.
+
+## Done (2026-11-16)
+- **torch:** `.venv` = `torch 2.14.1+cu130` + `torchvision 0.29.1+cu130`; `cuda.is_available()=True`,
+  arch list включает `sm_120`, матмул на GPU проходит, `pip check` — без конфликтов.
+- **Повторный `setup.sh` больше не откатывает на CPU:** torch/torchvision закреплены в `requirements.txt`,
+  ставятся с `--extra-index-url .../whl/cu130` (pip берёт `+cu130`); в конце — проверка CUDA с предупреждением.
+  Dry-run подтверждён: всё «already satisfied», CUDA-сборка остаётся.
+- **`python scripts/check_env.py`** — все пункты `[OK]`.
+- **`scripts/abliterate.py`** приведён к CLI `heretic-llm 2.1.0`: `--model`, `--dtypes`, `--n-trials`,
+  `--checkpoint-action continue`, `--export-strategy merge`, `--model-action save`, `--save-directory`.
+  Вызов через console-script `heretic` из venv (`python -m heretic` не работает — у пакета нет `__main__`).
+  Выбор trial из Pareto-фронта оставлен интерактивным.
+- Не проверено: реальный прогон аблитерации (нужна загрузка ~16 ГБ — только с подтверждения пользователя).

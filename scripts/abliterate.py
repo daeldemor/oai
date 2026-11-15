@@ -33,12 +33,17 @@ def main():
     os.environ.setdefault("HF_HOME", r"G:\Work\OAI\models\.hf-cache")
     os.makedirs(args.output, exist_ok=True)
 
+    # Флаги под heretic-llm 2.1.0. Выбор trial из Pareto-фронта Heretic спросит
+    # интерактивно (--trial-index не задаём — это осознанный выбор баланса отказы/KL).
     cmd = [
-        sys.executable, "-m", "heretic",
-        args.model,
-        "--output", args.output,
-        "--dtype", args.dtype,
+        os.path.join(os.path.dirname(sys.executable), "heretic"),  # console-script из venv
+        "--model", args.model,
+        "--dtypes", args.dtype, "float32",
         "--n-trials", str(args.trials),
+        "--checkpoint-action", "continue",
+        "--export-strategy", "merge",
+        "--model-action", "save",
+        "--save-directory", args.output,
     ]
     if args.max_batch_size > 0:
         cmd += ["--max-batch-size", str(args.max_batch_size)]
