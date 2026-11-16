@@ -101,23 +101,55 @@ zero-copy pinned memory, MTP-драфтинг (ускорение ~1.6–1.8x), 
 (llama.cpp + свои abliterated GGUF до 14B + готовые MoE-кванты с выгрузкой)
 остаётся оптимальным.
 
-### 2.2. Strata: установлено и опробовано (16.11.2026)
+### 2.2. Strata: установлена, опробована, отложена (16.11.2026)
 
-По запросу пользователя Strata стала **основным движком для пентест-направления**.
+По запросу пользователя Strata была выбрана основным движком — и проверена на практике.
 
-- Terminal 0.1.60.1 установлен (`C:\Users\rmari\AppData\Local\Strata\terminal\current\bin\strata.cmd`;
-  в новых терминалах команда `strata` доступна сразу). Клон репозитория —
-  `G:\Work\OAI\strata\` (в git не включён, это внешний проект).
-- Strata считает память как RAM+VRAM вместе: наша машина — 31+16=47 ГБ → «40 ГБ tier».
-- `strata launch --plan` проверен:
-  - `--family coder --model iq1_m` (Flash-Next Coder): скачивание 63.6 ГБ, влезает;
-  - `--family qwen36`: план выдал «модель уже на компьютере» — файлов нет,
-    похоже на ошибку отображения плана (помечено как неподтверждённое).
-- **Выбранный пентест-стек**: heretic-GGUF `llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved`
-  (Q4_K_M, 21.8 ГБ) через `strata launch --model-path` — abliterated + семейство,
-  нативно поддерживаемое Strata + сохранённые MTP-слои для драфтинга.
-  План Б: тот же файл через `scripts/serve.sh` (llama.cpp).
-- Мультимодальность не нужна: везде `--vision off`, mmproj не скачиваем.
+- Terminal 0.1.60.1 установлен (`C:\Users\rmari\AppData\Local\Strata\terminal\current\bin\strata.cmd`).
+  Клон репозитория — `G:\Work\OAI\strata\` (в git не включён).
+- Strata считает память как RAM+VRAM: наша машина — 31+16=47 ГБ → «40 ГБ tier».
+- ❌ **Сторонний GGUF Strata НЕ принимает** (проверено): «this model type is not
+  supported by the Strata engine (add it as a Custom model API with llama-server
+  instead)» — даже для поддерживаемого семейства Qwen3.6-35B-A3B. Heretic-кванты
+  в Strata не запустить; только официальные (стоковые) пакеты.
+- ⏸️ Strata отложена: для пентеста нужна abliterated-модель, а стоковая
+  `coder IQ1_M` (63.6 ГБ) смысла не имеет против бесплатной heretic на llama.cpp.
+  Вернуться при апгрейде RAM до 64 ГБ + если выйдет официальный uncensored-пакет
+  (OrcaRouter IQ3_XXS требует ~47 ГБ).
+- `strata launch --plan --family qwen36` выдаёт «модель уже на компьютере» при
+  её отсутствии — неподтверждённый баг отображения плана.
+
+### 2.3. Рабочий пентест-стек — ЗАМЕРЕНО (16.11.2026)
+
+**llama.cpp b12427 (CUDA 13.5, официальный релиз, `llama.cpp-bin/`) +
+heretic Qwen3.6-35B-A3B Q4_K_M, запуск через `scripts/serve.sh`:**
+
+```
+CPU_MOE=22 CTX=8192 PARALLEL=1 bash scripts/serve.sh <gguf на NVMe>
+```
+
+| Метрика | Значение | Условия |
+|---|---|---|
+| Генерация | **46–63 ток/с** | первый прогон / прогретый кэш |
+| Prompt processing | 12.7–15.6 ток/с | короткие промпты |
+| VRAM | 11.8 ГБ | `--n-cpu-moe 22`: эксперты 22 слоёв на CPU, 26 на GPU |
+
+Ключевые грабли, найденные замерами:
+
+1. **G: — это HDD** (Seagate ST1000DM003, ~118 МБ/с). Модели для llama.cpp
+   держать на **C: (NVMe Samsung 970 EVO)** — mmap-чтение с HDD убивает скорость.
+   Рабочая копия модели: `C:\Users\rmari\.lmstudio\models\llmfan46\...` (заодно
+   видна в LM Studio/Bionic). G: — только для архивов и bf16-загрузок.
+2. **31 ГБ RAM мало для `--cpu-moe` целиком**: 21.8-ГБ модель + ОЗУ/приложения →
+   своп, 0.12 ток/с. Лечится `--n-cpu-moe 22` (сплит экспертов GPU/CPU).
+3. Бэкенды llama.cpp из комплекта LM Studio standalone не работают (нет
+   cudart/cublas — DLL поставляет само приложение, которое НЕ установлено;
+   стоит только его updater). Поэтому официальный релиз в `llama.cpp-bin/`.
+4. LM Studio desktop-приложение не установлено — только **Bionic** с `lms.exe`;
+   `lms server start` без демона LM Studio не работает.
+5. Флаг `--flash-attn` в новых llama.cpp требует значение: `--flash-attn on`.
+6. MTP-тензоры GGUF пока игнорируются (`unused tensor ...nextn...`) —
+   драфтинг не включён; потенциал ускорения ещё выше.
 
 ## 3. Бюджет памяти (16 ГБ VRAM)
 
