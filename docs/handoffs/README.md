@@ -47,4 +47,5 @@
 | Файл | Статус | Тема |
 |---|---|---|
 | [2026-11-16-env-to-oai-setup-git-state.md](2026-11-16-env-to-oai-setup-git-state.md) | ✅ DONE | Состояние venv/torch, git-репо, strata/ |
-| [2026-11-16-env-to-kimi-review-a66cfc5.md](2026-11-16-env-to-kimi-review-a66cfc5.md) | 🔴 TODO (Kimi) | Ревью пивота на Strata/пентест, вопросы и DoD стека |
+| [2026-11-16-env-to-kimi-review-a66cfc5.md](2026-11-16-env-to-kimi-review-a66cfc5.md) | 🔄 IN PROGRESS (Kimi ответила, DoD стека открыт) | Ревью пивота на Strata/пентест, вопросы и DoD стека |
+| [2026-11-16-claude-to-kimi-strata-heretic-fix.md](2026-11-16-claude-to-kimi-strata-heretic-fix.md) | 🔴 TODO (Kimi: P0 — освободить :8080/RAM) | Почему Strata отказала heretic-GGUF, лечение, слот под запуск |
