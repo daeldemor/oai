@@ -101,25 +101,53 @@ zero-copy pinned memory, MTP-драфтинг (ускорение ~1.6–1.8x), 
 (llama.cpp + свои abliterated GGUF до 14B + готовые MoE-кванты с выгрузкой)
 остаётся оптимальным.
 
-### 2.2. Strata: установлена, опробована, отложена (16.11.2026)
+### 2.2. Strata: heretic Qwen3.6 запущена — ОСНОВНОЙ стек (16.11.2026, проверено)
 
-По запросу пользователя Strata была выбрана основным движком — и проверена на практике.
-
-- Terminal 0.1.60.1 установлен (`C:\Users\rmari\AppData\Local\Strata\terminal\current\bin\strata.cmd`).
-  Клон репозитория — `G:\Work\OAI\strata\` (в git не включён).
+- Terminal 0.1.60.1 (`C:\Users\rmari\AppData\Local\Strata\terminal\current\bin\strata.cmd`),
+  **движок ставится отдельно**: `strata update --yes --no-control` → engine 0.1.60 `windows-x86_64-cuda-cuda13`
+  (без него `strata doctor` показывает только terminal/monitor). Клон исходников — `G:\Work\OAI\strata\` (вне git).
 - Strata считает память как RAM+VRAM: наша машина — 31+16=47 ГБ → «40 ГБ tier».
-- ❌ **Сторонний GGUF Strata НЕ принимает** (проверено): «this model type is not
-  supported by the Strata engine (add it as a Custom model API with llama-server
-  instead)» — даже для поддерживаемого семейства Qwen3.6-35B-A3B. Heretic-кванты
-  в Strata не запустить; только официальные (стоковые) пакеты.
-- ⏸️ Strata отложена: для пентеста нужна abliterated-модель, а стоковая
-  `coder IQ1_M` (63.6 ГБ) смысла не имеет против бесплатной heretic на llama.cpp.
-  Вернуться при апгрейде RAM до 64 ГБ + если выйдет официальный uncensored-пакет
-  (OrcaRouter IQ3_XXS требует ~47 ГБ).
-- `strata launch --plan --family qwen36` выдаёт «модель уже на компьютере» при
-  её отсутствии — неподтверждённый баг отображения плана.
+  Из её семейств «хорошо» влезает только **Qwen3.6-35B-A3B в 4 битах**: Flash-Next требует ≥44 ГБ RAM
+  или стриминга с SSD (Coder IQ1_M, 63.6 ГБ, сток), Gyro-S — ниже качеством.
 
-### 2.3. Рабочий пентест-стек — ЗАМЕРЕНО (16.11.2026)
+**Почему сторонний GGUF сначала не запускался — две причины, обе обходятся:**
+
+1. `strata launch --model-path <папка>` без семейства идёт через импорт, который знает только Flash-Next
+   (`plan_import`: архитектура `qwen4exp`) → «this model type is not supported». Для Qwen3.6 свой файл
+   подаётся как **`--family qwen36 --model ud-q4_k_xl --model-path <папка>`**, а файл в папке должен называться
+   `Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` (`setup.py: OWN_PATH_FAMILIES`); чужой размер — только предупреждение.
+2. Движок проверяет формат экспертов: down-эксперты в **Q4_K не принимаются**
+   (`iq_kernels.cu: STRATA_D_FMTS` — Q5_1/Q5_0/Q4_1/Q4_0/Q8_0/Q5_K/Q6_K/IQ4_*). В Q4_K_M 20 из 40 слоёв
+   хранят down в Q4_K → `blk.5.experts are Q4_K/Q4_K, which the native expert kernels do not take`.
+   Лечение — `scripts/strata_fix_down.py`: перекодирует эти 20 тензоров Q4_K → Q5_1 без потерь по смыслу
+   (тот же 4-битный код, scale/min округляются до float16; `--verify` сверяет всё остальное байт в байт).
+   Файл растёт с 21.78 до 22.79 ГБ, ~2.5 мин на SSD.
+
+**Рабочий запуск** (файл на SSD `X:`; `G:` — HDD):
+
+```
+python -I scripts/strata_fix_down.py <...>-Q4_K_M.gguf X:\OAI-models\qwen36-heretic-strata\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --verify
+strata launch --family qwen36 --model ud-q4_k_xl --model-path "X:\OAI-models\qwen36-heretic-strata" ^
+  --vision off --context 32k --parallel 1 --access local --port 8080 --save-preset heretic-q36-32k --yes --no-tui
+# дальше просто: strata launch --preset heretic-q36-32k      стоп: strata launch --stop --preset heretic-q36-32k
+```
+
+| Метрика (Strata 0.1.60, RTX 5070 Ti 16 ГБ, контекст 32K) | Значение |
+|---|---|
+| Загрузка | ~3 мин (63 с раскладка экспертов + 85 с прогрев) |
+| Раскладка | гибрид: 100 из 256 экспертов на слой в VRAM (7.65 ГиБ), все 19.6 ГиБ в RAM, CPU — 8 потоков |
+| Генерация (decode) | **61–82 ток/с** (llama.cpp на том же файле — 46–63, §2.3) |
+| Prompt (короткие промпты) | 87–101 ток/с (llama.cpp — 12.7–15.6) |
+| MTP-драфтинг | не срабатывает на этом файле (`drafts accepted 0 of 0`) — резерв скорости |
+| evaluate.py | отказы **0/20**, sanity 9/10 (единственный «провал» — верный короткий ответ «336»: эвристика требует >30 символов); 11.5 мин, `--max-tokens 3072` |
+
+- Модель — thinking: ответ приходит после блока рассуждений (`reasoning_content`), `max_tokens` нужен 2048+
+  (`evaluate.py --max-tokens 3072`).
+- Одновременно с llama-server / LM Studio не поднимется: эксперты держатся в RAM (~19.6 ГиБ).
+- `strata launch --plan --family qwen36` без файлов пишет «модель уже на компьютере» — баг отображения плана (не проверялся).
+- Мультимодальность не нужна: `--vision off`, mmproj не скачиваем.
+
+### 2.3. Запасной стек: llama.cpp — ЗАМЕРЕНО (16.11.2026)
 
 **llama.cpp b12427 (CUDA 13.5, официальный релиз, `llama.cpp-bin/`) +
 heretic Qwen3.6-35B-A3B Q4_K_M, запуск через `scripts/serve.sh`:**

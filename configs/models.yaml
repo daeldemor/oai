@@ -10,21 +10,30 @@
 pentest_setup:
   primary:
     engine: strata
+    status: VERIFIED  # 16.11.2026: поднят, 61-82 ток/с decode, evaluate.py — docs/02-research.md §2.2
     model: llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF
-    quant: Q4_K_M  # 21.8 ГБ
+    quant: Q4_K_M  # 21.8 ГБ; для Strata down-эксперты Q4_K -> Q5_1 (scripts/strata_fix_down.py), 22.8 ГБ
     why: >
-      Abliterated (нет отказов на security-запросы) + семейство Qwen3.6-35B-A3B
-      нативно поддерживается Strata + MTP-слои сохранены (драфтинг = скорость).
-      Запуск: strata launch --model-path <папка с gguf> --vision off
-    risk: >
-      Сторонний GGUF в Strata не гарантирован (официально — свои пакеты).
-      План Б: тот же файл через scripts/serve.sh (llama.cpp) —
-      семейство поддерживает MTP-драфтинг и там.
+      Abliterated (нет отказов на security-запросы) + единственное семейство Strata,
+      которое хорошо влезает в 16 ГБ VRAM + 31 ГБ RAM (гибрид: 100/256 экспертов в VRAM).
+    launch: >
+      strata launch --family qwen36 --model ud-q4_k_xl
+      --model-path "X:\OAI-models\qwen36-heretic-strata" --vision off --context 32k
+      --parallel 1 --port 8080 --save-preset heretic-q36-32k --yes --no-tui
+    gotchas: >
+      Файл в папке должен называться Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf; без --family/--model
+      Strata отвечает «model type is not supported»; без перекодировки движок падает на
+      «blk.N.experts are Q4_K/Q4_K». Хранить на SSD (G: — HDD).
+  fallback:
+    engine: llama.cpp (scripts/serve.sh, CPU_MOE=22)
+    model: тот же Q4_K_M без перекодировки
+    speed: "46-63 ток/с decode"
   strata_stock_alternative:
     model: Qwen3.8-Flash-Next Coder IQ1_M (через strata launch --family coder --model iq1_m)
     download_gb: 63.6
-    why: Лучшее качество кода, что влезает в 32 ГБ RAM под Strata; стоковая модель —
-         на жёстких запросах возможны отказы (рамки: authorized lab / CTF / own infra).
+    why: >
+      Лучшее качество кода, что влезает в 32 ГБ RAM под Strata; стоковая модель —
+      на жёстких запросах возможны отказы (рамки: authorized lab / CTF / own infra).
   notes: >
     Uncensored-вариант Flash-Next (OrcaRouter, IQ3_XXS, ручная конвертация)
     требует ~47 ГБ — только после апгрейда RAM до 64 ГБ.

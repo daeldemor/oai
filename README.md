@@ -17,33 +17,46 @@
 | `configs/probes_*.json` | Промпты для оценки (отказы + способности) |
 | `scripts/check_env.py` | Проверка окружения (GPU, CUDA, RAM, диск) |
 | `scripts/download.sh` | Скачивание GGUF с Hugging Face (в каталог LM Studio или локально) |
-| `scripts/serve.sh` | Локальный OpenAI-совместимый сервер (llama.cpp из комплекта LM Studio) |
+| `scripts/serve.sh` | План Б: OpenAI-совместимый сервер на llama.cpp (`llama.cpp-bin/`) |
+| `scripts/strata_fix_down.py` | Перекодирует Q4_K down-эксперты GGUF в Q5_1, чтобы файл принял движок Strata |
 | `scripts/evaluate.py` | Оценка: уровень отказов + сохранность способностей |
 | `scripts/setup.sh` | venv + зависимости (нужен для evaluate.py) |
 | `scripts/abliterate.py`, `scripts/quantize.sh` | Опционально: своя аблитерация через Heretic |
 
-## Быстрый старт (пентест-направление, движок Strata)
+## Быстрый старт (пентест-направление, движок Strata) — проверено 16.11.2026
 
 Основной стек: **heretic Qwen3.6-35B-A3B (MoE) на движке Strata** —
-OpenAI/Anthropic-совместимый API на `http://127.0.0.1:8080`.
+OpenAI/Anthropic-совместимый API на `http://127.0.0.1:8080`, 61–82 ток/с генерации.
+Подробности и замеры — `docs/02-research.md` §2.2.
 
 ```bash
 cd /g/Work/OAI
 
-# 1. Модель уже скачивается/скачана в models/qwen36-heretic/ (Q4_K_M, 21.8 ГБ)
+# 0. Один раз: движок Strata (terminal ставит только CLI)
+strata update --yes --no-control
 
-# 2. Запуск через Strata (в новом терминале команда доступна как `strata`):
-strata launch --model-path "G:\Work\OAI\models\qwen36-heretic" \
-  --vision off --yes --no-tui
+# 1. Один раз: модель (21.8 ГБ) и перекодировка down-экспертов под ядра Strata (на SSD!)
+bash scripts/download.sh llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF Q4_K_M
+#    (download.sh кладёт в каталог LM Studio на NVMe C:)
+python -I scripts/strata_fix_down.py \
+  "/c/Users/rmari/.lmstudio/models/llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf" \
+  "X:/OAI-models/qwen36-heretic-strata/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --verify
 
-# 2б. План Б — через llama.cpp (если Strata не примет сторонний GGUF):
-bash scripts/serve.sh "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+# 2. Первый запуск (имя файла и --family/--model обязательны — иначе Strata откажет)
+strata launch --family qwen36 --model ud-q4_k_xl --model-path "X:\OAI-models\qwen36-heretic-strata" \
+  --vision off --context 32k --parallel 1 --access local --port 8080 \
+  --save-preset heretic-q36-32k --yes --no-tui
+#    дальше: strata launch --preset heretic-q36-32k        стоп: strata launch --stop --preset heretic-q36-32k
 
-# 3. Проверка отказов и качества:
-bash scripts/setup.sh && source .venv/Scripts/activate
-python scripts/evaluate.py --base http://localhost:1234/v1 --ablated http://localhost:8080/v1
-# (base — Gemma 26B heretic в LM Studio как эталон)
+# 3. Проверка отказов и sanity (thinking-модель — нужен большой лимит токенов)
+source .venv/Scripts/activate
+python scripts/evaluate.py --ablated http://127.0.0.1:8080/v1 --max-tokens 3072 --log logs/eval.json
 ```
+
+Не запускайте одновременно со Strata llama-server/LM Studio: эксперты модели держатся в RAM (~19.6 ГиБ из 31).
+
+План Б — тот же Q4_K_M через llama.cpp (без перекодировки, медленнее, `docs/02-research.md` §2.3):
+`CPU_MOE=22 CTX=8192 bash scripts/serve.sh <путь к Q4_K_M.gguf на NVMe>`.
 
 Запасные варианты под пентест (через `scripts/download.sh`):
 `pentest_priority` в `configs/models.yaml` — кодерская DavidAU Qwen3.8-27B

@@ -1,5 +1,5 @@
 # Handoff → Kimi Code (2026-11-16): ревью коммита a66cfc5 «Pivot to pentest direction on Strata»
-> Status: 🔴 TODO (ответ Kimi)
+> Status: ✅ DONE (DoD стека выполнен на Strata — см. [strata-heretic-fix](2026-11-16-claude-to-kimi-strata-heretic-fix.md))
 > From: Claude-сессия «Ticwatch NetHunter» (окружение + git). Why (business): две сессии работают в одной папке OAI — синхронизировать картину и не сломать друг другу работу.
 
 ## Кто что делает
@@ -81,3 +81,7 @@
 
 Границы соблюдаю: `.venv`, `setup.sh`, `requirements.txt`, `abliterate.py` — твоя зона,
 без хэндоффа не трогаю (видел твой `fe4e6c2` по torch/heretic CLI — принято).
+
+## Закрытие (Claude, 2026-11-16)
+DoD п.2 выполнен: Strata поднята → `/v1/models` отдаёт модель → `evaluate.py` прогнан (0/20 отказов, sanity 9/10),
+записано в `docs/02-research.md` §2.2. Стек — VERIFIED. Детали — [2026-11-16-claude-to-kimi-strata-heretic-fix.md](2026-11-16-claude-to-kimi-strata-heretic-fix.md).
