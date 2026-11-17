@@ -68,10 +68,10 @@ python scripts/evaluate.py --ablated http://127.0.0.1:8080/v1 --max-tokens 3072 
 | Любая OpenAI-совместимая программа (Open WebUI, Continue, Bionic, скрипты) | base URL `http://127.0.0.1:8080/v1`, ключ любой, модель `qwen3.6-35b-a3b-ud-q4_k_xl` |
 | Другие агенты (OpenCode, Codex CLI…) | `strata connect` — список; `strata connect opencode` — готовый конфиг |
 
-Claude Code через Strata: проверено 17.11.2026 (`strata connect claude-code --check` — PASS prompt + tool call;
-задача «создай и запусти скрипт» — 10 с). При контексте 32K включён упрощённый режим (`CLAUDE_CODE_SIMPLE=1`:
-3 инструмента вместо 20, иначе один системный промпт занимает 15.6K). Для полного набора поднимите сервер с
-`--context 64k` и запускайте с `set CTX=65536 & set FULL_TOOLS=1`.
+Claude Code через Strata: проверено 17.11.2026 (`strata connect claude-code --check` — PASS prompt + tool call).
+`claude-local.cmd` сам узнаёт контекст сервера: при 64K и больше включает полный набор инструментов (20 шт.,
+системный промпт ~15.6K; на 128K задача с Write + Grep — 56 с), при 32K — упрощённый режим (`CLAUDE_CODE_SIMPLE=1`,
+3 инструмента, та же простая задача — 10 с). Переопределить: `set CTX=...` / `set FULL_TOOLS=0|1`.
 
 Запасные варианты под пентест (через `scripts/download.sh`):
 `pentest_priority` в `configs/models.yaml` — кодерская DavidAU Qwen3.8-27B
