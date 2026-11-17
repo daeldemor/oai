@@ -77,6 +77,56 @@ Claude Code через Strata: проверено 17.11.2026 (`strata connect cl
 `pentest_priority` в `configs/models.yaml` — кодерская DavidAU Qwen3.8-27B
 и reasoning DeepSeek-V4-Pro-9B.
 
+### Шпаргалка команд
+
+Сервер Strata:
+
+```bash
+strata launch --preset heretic-q36-128k        # запуск, контекст 128K (текущий режим)
+strata launch --preset heretic-q36-32k         # запуск, контекст 32K (быстрее на коротких запросах)
+strata launch --stop --preset heretic-q36-128k # остановка (у каждого пресета своя)
+strata launch --stop --preset heretic-q36-32k
+curl http://127.0.0.1:8080/v1/models           # отвечает ли сервер
+strata monitor --url http://127.0.0.1:8080     # мониторинг в реальном времени
+strata logs --follow                           # журнал движка
+```
+
+Пользоваться:
+
+```bash
+# чат в браузере: http://127.0.0.1:8080
+# другие программы: http://127.0.0.1:8080/v1, ключ любой, модель qwen3.6-35b-a3b-ud-q4_k_xl
+G:\Work\OAI\scripts\claude-local.cmd                 # Claude Code на локальной модели (из папки проекта)
+G:\Work\OAI\scripts\claude-local.cmd -p "задача"     # один запрос без диалога
+```
+
+Проверка отказов и способностей (~12 мин):
+
+```bash
+cd /g/Work/OAI && .venv/Scripts/python.exe scripts/evaluate.py --ablated http://127.0.0.1:8080/v1 --max-tokens 3072 --log logs/eval.json
+```
+
+Разовая настройка с нуля (уже сделана, нужна при переустановке):
+
+```bash
+strata update --yes --no-control   # движок Strata
+cd /g/Work/OAI && .venv/Scripts/python.exe -I scripts/strata_fix_down.py \
+  "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf" \
+  "X:/OAI-models/qwen36-heretic-strata/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --verify   # ~2.5 мин
+strata launch --family qwen36 --model ud-q4_k_xl --model-path "X:\OAI-models\qwen36-heretic-strata" \
+  --vision off --context 128k --parallel 1 --access local --port 8080 \
+  --save-preset heretic-q36-128k --yes --no-tui
+```
+
+Запасной вариант без Strata (llama.cpp, медленнее; Strata перед этим остановить). С `G:` (HDD) модель грузится медленно, лучше указать копию на NVMe:
+
+```bash
+cd /g/Work/OAI && CPU_MOE=22 CTX=8192 bash scripts/serve.sh \
+  "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+```
+
+Пока работает Strata, llama-server и LM Studio одновременно не запускать: модель держит в RAM ~20 ГБ.
+
 ### GUI-вариант (без пентест-специфики)
 
 ```bash
