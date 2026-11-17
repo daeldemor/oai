@@ -18,6 +18,7 @@
 | `scripts/check_env.py` | Проверка окружения (GPU, CUDA, RAM, диск) |
 | `scripts/download.sh` | Скачивание GGUF с Hugging Face (в каталог LM Studio или локально) |
 | `scripts/serve.sh` | План Б: OpenAI-совместимый сервер на llama.cpp (`llama.cpp-bin/`) |
+| `scripts/claude-local.cmd` | Claude Code на локальной модели через Strata (ANTHROPIC_BASE_URL) |
 | `scripts/strata_fix_down.py` | Перекодирует Q4_K down-эксперты GGUF в Q5_1, чтобы файл принял движок Strata |
 | `scripts/evaluate.py` | Оценка: уровень отказов + сохранность способностей |
 | `scripts/setup.sh` | venv + зависимости (нужен для evaluate.py) |
@@ -57,6 +58,20 @@ python scripts/evaluate.py --ablated http://127.0.0.1:8080/v1 --max-tokens 3072 
 
 План Б — тот же Q4_K_M через llama.cpp (без перекодировки, медленнее, `docs/02-research.md` §2.3):
 `CPU_MOE=22 CTX=8192 bash scripts/serve.sh <путь к Q4_K_M.gguf на NVMe>`.
+
+### Как пользоваться (сервер Strata поднят)
+
+| Сценарий | Как |
+|---|---|
+| Агент в терминале (читает/правит файлы, гоняет команды) | `scripts\claude-local.cmd` — Claude Code на локальной модели; переменные только для этого окна, обычный облачный Claude Code не затронут. Один запрос: `scripts\claude-local.cmd -p "задача"` |
+| Чат в браузере | `http://127.0.0.1:8080` — встроенная страница Strata |
+| Любая OpenAI-совместимая программа (Open WebUI, Continue, Bionic, скрипты) | base URL `http://127.0.0.1:8080/v1`, ключ любой, модель `qwen3.6-35b-a3b-ud-q4_k_xl` |
+| Другие агенты (OpenCode, Codex CLI…) | `strata connect` — список; `strata connect opencode` — готовый конфиг |
+
+Claude Code через Strata: проверено 17.11.2026 (`strata connect claude-code --check` — PASS prompt + tool call;
+задача «создай и запусти скрипт» — 10 с). При контексте 32K включён упрощённый режим (`CLAUDE_CODE_SIMPLE=1`:
+3 инструмента вместо 20, иначе один системный промпт занимает 15.6K). Для полного набора поднимите сервер с
+`--context 64k` и запускайте с `set CTX=65536 & set FULL_TOOLS=1`.
 
 Запасные варианты под пентест (через `scripts/download.sh`):
 `pentest_priority` в `configs/models.yaml` — кодерская DavidAU Qwen3.8-27B
