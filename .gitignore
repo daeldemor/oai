@@ -8,6 +8,7 @@ __pycache__/
 logs/
 llama.cpp/
 llama.cpp-bin/
+llama.cpp-bin-*/
 strata/
 install.sh
 logs*.txt
