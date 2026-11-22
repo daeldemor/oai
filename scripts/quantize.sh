@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Конвертация safetensors -> GGUF F16 -> квант (llama.cpp).
-# Использование: bash scripts/quantize.sh models/qwen3-8b-abliterated q5_k_m
+# Использование: bash scripts/quantize.sh X:/OAI-models/qwen3-8b-abliterated q5_k_m
 set -euo pipefail
 
 MODEL_DIR="${1:?укажите каталог с safetensors}"

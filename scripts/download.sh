@@ -9,7 +9,7 @@
 #   bash scripts/download.sh DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF IQ4_XS local
 #
 # lmstudio (по умолчанию) — кладёт в каталог LM Studio, файл сразу виден
-# в LM Studio и Bionic. local — в G:\Work\OAI\models\.
+# в LM Studio и Bionic. local — в X:\OAI-models\ (SSD).
 set -euo pipefail
 
 REPO="${1:?укажите репозиторий, напр. mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF}"
@@ -33,7 +33,7 @@ NAME="${REPO##*/}"
 if [ "$TARGET" = "lmstudio" ]; then
   DEST="/c/Users/rmari/.lmstudio/models/$PUBLISHER/$NAME"
 else
-  DEST="/g/Work/OAI/models/$NAME"
+  DEST="/x/OAI-models/$NAME"
 fi
 mkdir -p "$DEST"
 

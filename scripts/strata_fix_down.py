@@ -14,8 +14,8 @@ m' = -dmin*m, q тот же. Единственная погрешность —
 
 Пример:
     python -I scripts/strata_fix_down.py \
-        models/qwen36-heretic/<имя>-Q4_K_M.gguf \
-        models/qwen36-heretic-strata/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --verify
+        X:/OAI-models/qwen36-heretic/<имя>-Q4_K_M.gguf \
+        X:/OAI-models/qwen36-heretic-strata/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf --verify
 """
 import argparse
 import mmap

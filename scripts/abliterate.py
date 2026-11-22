@@ -6,7 +6,7 @@ Heretic сам подбирает направления отказа по сл�
 
 Пример:
     python scripts/abliterate.py --model Qwen/Qwen3-8B \
-        --output models/qwen3-8b-abliterated --trials 60
+        --output X:/OAI-models/qwen3-8b-abliterated --trials 60
 
 Требования: активированное venv (scripts/setup.sh), достаточно RAM (см. docs/02).
 Загрузка базовой модели идёт через huggingface_hub — для gated-моделей
@@ -30,7 +30,7 @@ def main():
                     help="0 = авто (Heretic сам подберёт под VRAM)")
     args = ap.parse_args()
 
-    os.environ.setdefault("HF_HOME", r"G:\Work\OAI\models\.hf-cache")
+    os.environ.setdefault("HF_HOME", r"X:\OAI-models\.hf-cache")
     os.makedirs(args.output, exist_ok=True)
 
     # Флаги под heretic-llm 2.1.0. Выбор trial из Pareto-фронта Heretic спросит

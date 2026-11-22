@@ -111,18 +111,18 @@ cd /g/Work/OAI && .venv/Scripts/python.exe scripts/evaluate.py --ablated http://
 ```bash
 strata update --yes --no-control   # движок Strata
 cd /g/Work/OAI && .venv/Scripts/python.exe -I scripts/strata_fix_down.py \
-  "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf" \
+  "X:/OAI-models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf" \
   "X:/OAI-models/qwen36-heretic-strata/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" --verify   # ~2.5 мин
 strata launch --family qwen36 --model ud-q4_k_xl --model-path "X:\OAI-models\qwen36-heretic-strata" \
   --vision off --context 128k --parallel 1 --access local --port 8080 \
   --save-preset heretic-q36-128k --yes --no-tui
 ```
 
-Запасной вариант без Strata (llama.cpp, медленнее; Strata перед этим остановить). С `G:` (HDD) модель грузится медленно, лучше указать копию на NVMe:
+Запасной вариант без Strata (llama.cpp, медленнее; Strata перед этим остановить). Модели лежат на SSD `X:\OAI-models` (перенесены с HDD `G:` 2026-11-22):
 
 ```bash
 cd /g/Work/OAI && CPU_MOE=22 CTX=8192 bash scripts/serve.sh \
-  "models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+  "X:/OAI-models/qwen36-heretic/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
 ```
 
 Пока работает Strata, llama-server и LM Studio одновременно не запускать: модель держит в RAM ~20 ГБ.
@@ -134,14 +134,28 @@ bash scripts/download.sh mradermacher/gemma-4-12B-it-uncensored-heretic-GGUF Q5_
 # дальше модель видна в LM Studio и Bionic
 ```
 
+### Inkling-2-Mini Uncensored, 320K контекста (патченая llama.cpp)
+
+Двойной клик по ярлыку **«Inkling 320K»** на рабочем столе (или `scripts\inkling.cmd`). Сервер стартует
+в свёрнутом окне «Inkling server», через ~15 с в браузере открывается чат `http://127.0.0.1:8080/`.
+Остановить: закрыть окно «Inkling server». Strata должна быть остановлена, обе слушают порт 8080.
+
+| Ярлык / аргумент | Контекст | Чтение промпта | Генерация |
+|---|---:|---:|---:|
+| «Inkling 320K» / без аргумента | 320K | 673 ток/с на 8k, 294 в среднем до 300k | 38 / 25 на 300k |
+| `inkling.cmd fast` | 320K | 586 на 8k | 41 |
+| «Inkling 128K» / `128k` | 128K | 918 на 8k | 42 |
+
+Подробности и замеры: `docs/02-research.md` §2.4.1.
+
 ## Продвинутый путь (опционально): своя аблитерация
 
 Если когда-нибудь захочется сделать собственную версию, а не готовую:
 
 ```bash
 source .venv/Scripts/activate
-python scripts/abliterate.py --model Qwen/Qwen3-8B --output models/qwen3-8b-abliterated
-bash scripts/quantize.sh models/qwen3-8b-abliterated q5_k_m
+python scripts/abliterate.py --model Qwen/Qwen3-8B --output X:/OAI-models/qwen3-8b-abliterated
+bash scripts/quantize.sh X:/OAI-models/qwen3-8b-abliterated q5_k_m
 ```
 
 Обоснование выбора движков и моделей — в `docs/02-research.md`.
