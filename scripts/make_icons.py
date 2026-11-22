@@ -56,10 +56,11 @@ def render(label, c1, c2, with_text):
     base = Image.composite(Image.new("RGBA", (S, S), (255, 255, 255, 255)), base, gloss)
     base.putalpha(shape)
 
+    # левый нижний угол пустой: туда Windows кладёт стрелку ярлыка
     if with_text:
-        cx, cy, r = S / 2, S * 0.43, S * 0.17
+        cx, cy, r = S * 0.66, S * 0.73, S * 0.16
     else:
-        cx, cy, r = S / 2, S * 0.62, S * 0.25
+        cx, cy, r = S * 0.62, S * 0.64, S * 0.23
     drop = drop_mask(cx, cy, r)
 
     # тень под каплей
@@ -70,10 +71,10 @@ def render(label, c1, c2, with_text):
 
     if with_text:
         d = ImageDraw.Draw(base)
-        font = ImageFont.truetype(FONT, int(S * 0.24))
+        font = ImageFont.truetype(FONT, int(S * 0.26))
         font.set_variation_by_name("Bold")
         w = d.textlength(label, font=font)
-        d.text(((S - w) / 2, S * 0.66), label, font=font, fill=(255, 255, 255, 255))
+        d.text(((S - w) / 2, S * 0.05), label, font=font, fill=(255, 255, 255, 255))
 
     base.putalpha(ImageChops.multiply(base.getchannel("A"), shape))
     return base
