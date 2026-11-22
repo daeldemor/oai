@@ -21,6 +21,17 @@ $Modes = @(
     @{ Text = '128K: всё быстрее';                  Arg = '128k' }
 )
 
+function Get-ApiKey {
+    # постоянный случайный ключ сервера; без него любая открытая в браузере страница могла бы
+    # отправить POST /tools и выполнить команду (подтверждение «Allow once» есть только в чате)
+    $f = Join-Path $State 'api-key.txt'
+    if (-not (Test-Path $f)) {
+        New-Item -ItemType Directory -Force $State | Out-Null
+        $b = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+        Set-Content $f (($b | ForEach-Object { $_.ToString('x2') }) -join '') -Encoding ASCII -NoNewline
+    }
+    (Get-Content $f -Raw).Trim()
+}
 function Get-OurServer { Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" | Where-Object { $_.ExecutablePath -eq $Exe } }
 function Test-Port { try { (Invoke-RestMethod "$Url/health" -TimeoutSec 2).status -eq 'ok' } catch { $false } }
 
@@ -70,9 +81,10 @@ $form.Controls.Add($cmbCtx)
 
 $lblWarn = New-Object System.Windows.Forms.Label
 $lblWarn.Text = "Модель сможет читать и менять файлы и запускать команды на этом компьютере, без песочницы. " +
-                "Давайте ей папку проекта, а не весь диск. Сервер доступен только с этого компьютера (127.0.0.1)."
+                "Давайте ей папку проекта, а не весь диск. Без подтверждений: в первом запросе стрелка у «Allow once» -> " +
+                "«Always allow all tools from Server Tools», браузер запомнит."
 $lblWarn.ForeColor = [System.Drawing.Color]::FromArgb(160, 90, 0)
-$lblWarn.SetBounds(16, 120, 528, 60)
+$lblWarn.SetBounds(16, 116, 528, 66)
 $form.Controls.Add($lblWarn)
 
 $lblStatus = New-Object System.Windows.Forms.Label
@@ -123,11 +135,21 @@ $btnStart.Add_Click({
     }
     Set-Status 'Загружаю модель, это около 15–30 секунд…'
     $mode = $Modes[$cmbCtx.SelectedIndex].Arg
+    $key = Get-ApiKey
     $env:AGENT_DIR = $dir
     $p = Start-Process cmd.exe -ArgumentList "/c `"`"$Launcher`" $mode`"" -WindowStyle Hidden -PassThru
     while (-not $p.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 200 }
     if (-not (Test-Port)) {
         [System.Windows.Forms.MessageBox]::Show($form, 'Сервер не поднялся. Откройте окно «Inkling server» на панели задач, там ошибка.', 'Inkling Agent') | Out-Null
+    } else {
+        Set-Clipboard -Value $key
+        $seen = Join-Path $State 'api-key-shown.txt'
+        if (-not (Test-Path $seen)) {
+            [System.Windows.Forms.MessageBox]::Show($form,
+                "Сервер защищён ключом, он уже скопирован в буфер обмена.`n`nЕсли чат в браузере попросит API key, вставьте его (Ctrl+V). Браузер запомнит ключ, больше спрашивать не будет.`n`nКлюч лежит в $State\api-key.txt",
+                'Inkling Agent') | Out-Null
+            Set-Content $seen (Get-Date -Format 'yyyy-MM-dd') -Encoding ASCII
+        }
     }
     $form.Close()
 })

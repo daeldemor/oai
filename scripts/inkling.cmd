@@ -13,6 +13,16 @@ set "EXE=%ROOT%\llama.cpp-src\build\bin\llama-server.exe"
 set "MODEL=C:\Users\rmari\.lmstudio\models\AtomicChat\Inkling-2-Mini-Uncensored-GGUF\Inkling-2-Mini-Uncensored-AD-IQ3_S.gguf"
 set "PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5\bin\x64;%PATH%"
 set "PORT=8080"
+rem API key: without it any web page open in the browser could POST to /tools and run commands
+rem (the "Allow once" prompt lives only in the chat UI). The .ps1 launchers create the key file.
+set "KEYFILE=%LOCALAPPDATA%\inkling\api-key.txt"
+set "KEYARGS="
+if exist "%KEYFILE%" set "KEYARGS=--api-key-file "%KEYFILE%""
+if defined AGENT_DIR if not defined KEYARGS (
+  echo Agent mode needs an API key: start it from the "Inkling Agent" shortcut.
+  pause
+  exit /b 1
+)
 
 rem experts of the outer layers go to RAM; no "|" in the regexes, cmd would treat it as a pipe
 set "ARGS=-c 327680 -ctk q4_0 -ctv q4_0 -ub 192 -ot blk\.[0-3]\.ffn_.*_exps\.=CPU -ot blk\.2[0-3]\.ffn_.*_exps\.=CPU"
@@ -31,7 +41,7 @@ set "AGENTARGS="
 if defined AGENT_DIR set "WD=%AGENT_DIR%"
 if defined AGENT_DIR set "AGENTARGS=--agent"
 
-start "Inkling server" /min /D "%WD%" "%EXE%" -m "%MODEL%" --host 127.0.0.1 --port %PORT% --parallel 1 -ngl 999 --flash-attn on --jinja --load-mode none -b 2048 --alias inkling --ui-config-file "%ROOT%\configs\inkling-ui.json" %AGENTARGS% %ARGS%
+start "Inkling server" /min /D "%WD%" "%EXE%" -m "%MODEL%" --host 127.0.0.1 --port %PORT% --parallel 1 -ngl 999 --flash-attn on --jinja --load-mode none -b 2048 --alias inkling --ui-config-file "%ROOT%\configs\inkling-ui.json" %AGENTARGS% %KEYARGS% %ARGS%
 
 echo Loading Inkling, about 30 s...
 for /l %%i in (1,1,90) do (
