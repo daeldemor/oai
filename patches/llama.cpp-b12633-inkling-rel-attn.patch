@@ -219,3 +219,40 @@ index 45477a6..31b89a3 100644
  
          cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, inputs[0])));
          cur = convolve(build_lora_mm(layer.wo, cur), layer.attn_post_conv, nullptr, state, history, recr, 2*n_embd_k_gqa);
+diff --git a/tools/server/server-http.cpp b/tools/server/server-http.cpp
+index 0244d4a..fdf5775 100644
+--- a/tools/server/server-http.cpp
++++ b/tools/server/server-http.cpp
+@@ -344,7 +344,13 @@ bool server_http_context::init_listener(const common_params & params) {
+         return endpoints;
+     }();
+ 
+-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
++    // local patch (opt-in, LLAMA_UI_TRUST_SAME_ORIGIN=1): the built-in UI served by this server does not need the key
++    static const bool trust_same_origin = [] {
++        const char * e = getenv("LLAMA_UI_TRUST_SAME_ORIGIN");
++        return e && atoi(e) == 1;
++    }();
++
++    auto middleware_validate_api_key = [api_keys = params.api_keys, port = params.port](const httplib::Request & req, httplib::Response & res) {
+         // If API key is not set, skip validation
+         if (api_keys.empty()) {
+             return true;
+@@ -355,6 +361,17 @@ bool server_http_context::init_listener(const common_params & params) {
+             return true;
+         }
+ 
++        // Sec-Fetch-Site is set by the browser and page scripts cannot forge it, so "same-origin" means the
++        // request comes from a page of this origin; the Host check rejects DNS rebinding (a rebound page is
++        // same-origin too, but its Host is the attacker's name). Non-browser clients still need the key.
++        if (trust_same_origin && req.get_header_value("Sec-Fetch-Site") == "same-origin") {
++            const std::string host = req.get_header_value("Host");
++            const std::string sfx  = ":" + std::to_string(port);
++            if (host == "127.0.0.1" + sfx || host == "localhost" + sfx || host == "[::1]" + sfx) {
++                return true;
++            }
++        }
++
+         // Check for API key in the Authorization header
+         std::string req_api_key = req.get_header_value("Authorization");
+         if (req_api_key.empty()) {

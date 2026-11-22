@@ -141,15 +141,6 @@ $btnStart.Add_Click({
     while (-not $p.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 200 }
     if (-not (Test-Port)) {
         [System.Windows.Forms.MessageBox]::Show($form, 'Сервер не поднялся. Откройте окно «Inkling server» на панели задач, там ошибка.', 'Inkling Agent') | Out-Null
-    } else {
-        Set-Clipboard -Value $key
-        $seen = Join-Path $State 'api-key-shown.txt'
-        if (-not (Test-Path $seen)) {
-            [System.Windows.Forms.MessageBox]::Show($form,
-                "Сервер защищён ключом, он уже скопирован в буфер обмена.`n`nЕсли чат в браузере попросит API key, вставьте его (Ctrl+V). Браузер запомнит ключ, больше спрашивать не будет.`n`nКлюч лежит в $State\api-key.txt",
-                'Inkling Agent') | Out-Null
-            Set-Content $seen (Get-Date -Format 'yyyy-MM-dd') -Encoding ASCII
-        }
     }
     $form.Close()
 })

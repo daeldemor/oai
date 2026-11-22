@@ -341,7 +341,11 @@ write_file, edit_file, get_info — в выбранной папке, перед
 то есть «простой» кросс-доменный POST без preflight со сторонней страницы мог запустить команду. Поэтому
 сервер всегда стартует с `--api-key-file %LOCALAPPDATA%\inkling\api-key.txt` (48 hex, создают
 `.ps1`-лаунчеры). Проверено: без ключа `POST /tools` → 401, `/props` → 401, `/health` публичный; веб-чат
-показывает «Enter API Key» и запоминает ключ; Claude Code получает его как `ANTHROPIC_AUTH_TOKEN`.
+раньше показывал «Enter API Key», теперь ключ ему не нужен: в патч добавлено исключение в
+`tools/server/server-http.cpp` (включается `LLAMA_UI_TRUST_SAME_ORIGIN=1`, его ставит `inkling.cmd`) для запросов
+с `Sec-Fetch-Site: same-origin` и Host loopback:8080. Проверено curl: same-origin + Host 127.0.0.1/localhost → 200,
+cross-site → 403, same-origin + чужой Host (DNS rebinding) → 403, без заголовков и ключа → 401, с ключом → 200;
+в браузере без сохранённого ключа чат работает с инструментами. Claude Code получает ключ как `ANTHROPIC_AUTH_TOKEN`.
 Песочницы нет: команды выполняются от имени пользователя. Режимы без подтверждений: в чате
 «Always allow all tools from Server Tools» (хранится в браузере), в CLI «Без ограничений»
 (`--dangerously-skip-permissions`); оба проверены.

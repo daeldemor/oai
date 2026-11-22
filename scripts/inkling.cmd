@@ -15,6 +15,9 @@ set "PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5\bin\x64;%PATH
 set "PORT=8080"
 rem API key: without it any web page open in the browser could POST to /tools and run commands
 rem (the "Allow once" prompt lives only in the chat UI). The .ps1 launchers create the key file.
+rem The built-in chat itself goes without the key: the patched server trusts browser requests marked
+rem Sec-Fetch-Site: same-origin with a loopback Host (see patches/, LLAMA_UI_TRUST_SAME_ORIGIN).
+set "LLAMA_UI_TRUST_SAME_ORIGIN=1"
 set "KEYFILE=%LOCALAPPDATA%\inkling\api-key.txt"
 set "KEYARGS="
 if exist "%KEYFILE%" set "KEYARGS=--api-key-file "%KEYFILE%""
