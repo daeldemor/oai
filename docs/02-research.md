@@ -346,9 +346,14 @@ write_file, edit_file, get_info — в выбранной папке, перед
 с `Sec-Fetch-Site: same-origin` и Host loopback:8080. Проверено curl: same-origin + Host 127.0.0.1/localhost → 200,
 cross-site → 403, same-origin + чужой Host (DNS rebinding) → 403, без заголовков и ключа → 401, с ключом → 200;
 в браузере без сохранённого ключа чат работает с инструментами. Claude Code получает ключ как `ANTHROPIC_AUTH_TOKEN`.
-Песочницы нет: команды выполняются от имени пользователя. Режимы без подтверждений: в чате
-«Always allow all tools from Server Tools» (хранится в браузере), в CLI «Без ограничений»
-(`--dangerously-skip-permissions`); оба проверены.
+Песочницы нет: команды выполняются от имени пользователя. Режимы без подтверждений: в «Inkling Agent»
+галочка «Без подтверждений (bypass)», в CLI «Без ограничений» (`--dangerously-skip-permissions`); оба проверены.
+Разрешения веб-чата живут только в `localStorage` браузера (`LlamaUi.alwaysAllowedTools`, список `server:<tool>`),
+поэтому в патч добавлена страница `GET /inkling-bootstrap?t=<токен>&bypass=0|1` (`tools/server/server.cpp`): она
+записывает список всех инструментов сервера (bypass=1) или стирает его (bypass=0) и переходит в чат. Токен
+одноразовый, задаётся на запуск через `LLAMA_UI_BOOTSTRAP_TOKEN` (его генерирует `inkling-agent.ps1`), поэтому
+чужая страница, открыв этот адрес, разрешения не переключит. Проверено: без токена и с неверным → 403, повтор
+того же токена → 403, bypass=1 записал 7 инструментов, bypass=0 стёр их, и чат снова спросил «Allow once».
 
 ## 3. Бюджет памяти (16 ГБ VRAM)
 

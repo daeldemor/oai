@@ -220,7 +220,7 @@ index 45477a6..31b89a3 100644
          cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, inputs[0])));
          cur = convolve(build_lora_mm(layer.wo, cur), layer.attn_post_conv, nullptr, state, history, recr, 2*n_embd_k_gqa);
 diff --git a/tools/server/server-http.cpp b/tools/server/server-http.cpp
-index 0244d4a..fdf5775 100644
+index 0244d4a..24b9c5a 100644
 --- a/tools/server/server-http.cpp
 +++ b/tools/server/server-http.cpp
 @@ -344,7 +344,13 @@ bool server_http_context::init_listener(const common_params & params) {
@@ -238,10 +238,15 @@ index 0244d4a..fdf5775 100644
          // If API key is not set, skip validation
          if (api_keys.empty()) {
              return true;
-@@ -355,6 +361,17 @@ bool server_http_context::init_listener(const common_params & params) {
+@@ -355,6 +361,22 @@ bool server_http_context::init_listener(const common_params & params) {
              return true;
          }
  
++        // local patch: the one-shot permissions page checks its own per-launch token (server.cpp)
++        if (req.path == "/inkling-bootstrap") {
++            return true;
++        }
++
 +        // Sec-Fetch-Site is set by the browser and page scripts cannot forge it, so "same-origin" means the
 +        // request comes from a page of this origin; the Host check rejects DNS rebinding (a rebound page is
 +        // same-origin too, but its Host is the attacker's name). Non-browser clients still need the key.
@@ -256,3 +261,39 @@ index 0244d4a..fdf5775 100644
          // Check for API key in the Authorization header
          std::string req_api_key = req.get_header_value("Authorization");
          if (req_api_key.empty()) {
+diff --git a/tools/server/server.cpp b/tools/server/server.cpp
+index fabf0a0..d59027b 100644
+--- a/tools/server/server.cpp
++++ b/tools/server/server.cpp
+@@ -173,6 +173,31 @@ static bool server_prepare_params(common_params & params, server_role_type role_
+ static void server_register_routes(server_http_context & ctx_http, server_routes & routes) {
+     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
++    // local patch: one-shot page that sets the built-in chat's tool permissions in the browser (localStorage) and
++    // opens the chat. Needs the per-launch token from LLAMA_UI_BOOTSTRAP_TOKEN, works once: a foreign page that
++    // navigates here cannot switch the permissions without the token. bypass=1 allows all server tools, else clears.
++    ctx_http.get ("/inkling-bootstrap",        ex_wrapper([](const server_http_req & req) -> server_http_res_ptr {
++        static std::atomic<bool> used{false};
++        static const std::string token = [] {
++            const char * e = getenv("LLAMA_UI_BOOTSTRAP_TOKEN");
++            return std::string(e ? e : "");
++        }();
++        auto res = std::make_unique<server_http_res>();
++        if (token.size() < 16 || req.get_param("t") != token || used.exchange(true)) {
++            res->status = 403;
++            res->data   = R"({"error":{"message":"invalid or already used bootstrap token","code":403}})";
++            return res;
++        }
++        const bool bypass = req.get_param("bypass") == "1";
++        res->content_type        = "text/html; charset=utf-8";
++        res->headers["Cache-Control"] = "no-store";
++        res->data = std::string("<!doctype html><meta charset=utf-8><title>Inkling</title><script>(async()=>{")
++            + "const k='LlamaUi.alwaysAllowedTools';try{"
++            + (bypass ? "const l=await (await fetch('/tools')).json();localStorage.setItem(k,JSON.stringify(l.map(t=>'server:'+t.tool)));"
++                      : "localStorage.removeItem(k);")
++            + "}catch(e){console.error(e)}location.replace('/');})();</script>";
++        return res;
++    }));
+     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
+     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
+     ctx_http.post("/props",                    ex_wrapper(routes.post_props));

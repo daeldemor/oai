@@ -38,7 +38,7 @@ function Test-Port { try { (Invoke-RestMethod "$Url/health" -TimeoutSec 2).statu
 $font = New-Object System.Drawing.Font('Segoe UI', 10)
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Inkling Agent'
-$form.ClientSize = New-Object System.Drawing.Size(560, 268)
+$form.ClientSize = New-Object System.Drawing.Size(560, 300)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -79,28 +79,37 @@ $Modes | ForEach-Object { [void]$cmbCtx.Items.Add($_.Text) }
 $cmbCtx.SelectedIndex = 0
 $form.Controls.Add($cmbCtx)
 
+$BypassFile = Join-Path $State 'agent-bypass.txt'
+$chkBypass = New-Object System.Windows.Forms.CheckBox
+$chkBypass.Text = 'Без подтверждений (bypass): модель выполняет действия, не спрашивая'
+$chkBypass.SetBounds(16, 114, 528, 26)
+$chkBypass.Checked = (Test-Path $BypassFile) -and ((Get-Content $BypassFile -Raw -ErrorAction SilentlyContinue).Trim() -eq '1')
+$form.Controls.Add($chkBypass)
+
 $lblWarn = New-Object System.Windows.Forms.Label
 $lblWarn.Text = "Модель сможет читать и менять файлы и запускать команды на этом компьютере, без песочницы. " +
-                "Давайте ей папку проекта, а не весь диск. Без подтверждений: в первом запросе стрелка у «Allow once» -> " +
-                "«Always allow all tools from Server Tools», браузер запомнит."
+                "Давайте ей папку проекта, а не весь диск. Без галочки чат спрашивает «Allow once / Deny» перед каждым действием."
 $lblWarn.ForeColor = [System.Drawing.Color]::FromArgb(160, 90, 0)
-$lblWarn.SetBounds(16, 116, 528, 66)
+$lblWarn.SetBounds(16, 146, 528, 70)
 $form.Controls.Add($lblWarn)
+$chkBypass.Add_CheckedChanged({
+    $lblWarn.ForeColor = if ($chkBypass.Checked) { [System.Drawing.Color]::FromArgb(190, 30, 30) } else { [System.Drawing.Color]::FromArgb(160, 90, 0) }
+})
 
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.SetBounds(16, 186, 528, 22)
+$lblStatus.SetBounds(16, 220, 528, 22)
 $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($lblStatus)
 
 $btnStart = New-Object System.Windows.Forms.Button
 $btnStart.Text = 'Запустить'
-$btnStart.SetBounds(332, 220, 104, 34)
+$btnStart.SetBounds(332, 252, 104, 34)
 $form.AcceptButton = $btnStart
 $form.Controls.Add($btnStart)
 
 $btnCancel = New-Object System.Windows.Forms.Button
 $btnCancel.Text = 'Отмена'
-$btnCancel.SetBounds(444, 220, 100, 34)
+$btnCancel.SetBounds(444, 252, 100, 34)
 $btnCancel.Add_Click({ $form.Close() })
 $form.CancelButton = $btnCancel
 $form.Controls.Add($btnCancel)
@@ -121,7 +130,8 @@ $btnStart.Add_Click({
     New-Item -ItemType Directory -Force $State | Out-Null
     Set-Content $LastDir $dir -Encoding UTF8
 
-    $btnStart.Enabled = $false; $btnBrowse.Enabled = $false; $cmbCtx.Enabled = $false
+    Set-Content $BypassFile $(if ($chkBypass.Checked) { '1' } else { '0' }) -Encoding ASCII
+    $btnStart.Enabled = $false; $btnBrowse.Enabled = $false; $cmbCtx.Enabled = $false; $chkBypass.Enabled = $false
     $ours = Get-OurServer
     if ((Test-Port) -and -not $ours) {
         [System.Windows.Forms.MessageBox]::Show($form, 'Порт 8080 занят другим сервером (Strata?). Остановите его и запустите снова.', 'Inkling Agent') | Out-Null
@@ -137,6 +147,10 @@ $btnStart.Add_Click({
     $mode = $Modes[$cmbCtx.SelectedIndex].Arg
     $key = Get-ApiKey
     $env:AGENT_DIR = $dir
+    # одноразовый токен: браузер откроет /inkling-bootstrap, который выставит разрешения чата
+    $tb = New-Object byte[] 16; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($tb)
+    $env:LLAMA_UI_BOOTSTRAP_TOKEN = ($tb | ForEach-Object { $_.ToString('x2') }) -join ''
+    $env:UI_BYPASS = if ($chkBypass.Checked) { '1' } else { '0' }
     $p = Start-Process cmd.exe -ArgumentList "/c `"`"$Launcher`" $mode`"" -WindowStyle Hidden -PassThru
     while (-not $p.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 200 }
     if (-not (Test-Port)) {

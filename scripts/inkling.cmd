@@ -57,4 +57,11 @@ exit /b 1
 
 :ready
 echo Inkling is ready: http://127.0.0.1:%PORT%/
-if not defined NOBROWSER start "" http://127.0.0.1:%PORT%/
+if defined NOBROWSER exit /b 0
+rem LLAMA_UI_BOOTSTRAP_TOKEN (one-shot, set by inkling-agent.ps1): open the chat through /inkling-bootstrap,
+rem which sets the chat's tool permissions: UI_BYPASS=1 allows all tools, otherwise the chat asks each time
+if defined LLAMA_UI_BOOTSTRAP_TOKEN (
+  start "" "http://127.0.0.1:%PORT%/inkling-bootstrap?t=%LLAMA_UI_BOOTSTRAP_TOKEN%&bypass=%UI_BYPASS%"
+) else (
+  start "" http://127.0.0.1:%PORT%/
+)
