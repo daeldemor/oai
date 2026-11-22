@@ -9,6 +9,7 @@ logs/
 llama.cpp/
 llama.cpp-bin/
 llama.cpp-bin-*/
+llama.cpp-src/
 strata/
 install.sh
 logs*.txt
