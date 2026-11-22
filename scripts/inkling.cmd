@@ -4,6 +4,8 @@ rem   inkling.cmd        320K context, faster prompt reading (default)
 rem   inkling.cmd fast   320K context, faster generation, slower prompt reading
 rem   inkling.cmd 128k   128K context, everything faster
 rem Stop: close the "Inkling server" window.
+rem Agent mode (web chat gets file and shell tools): set AGENT_DIR=<folder> before the call;
+rem the server then runs in that folder with --agent. scripts\inkling-agent.ps1 does this.
 rem ASCII only: cmd reads this file in the OEM code page.
 setlocal
 set "ROOT=%~dp0.."
@@ -24,11 +26,16 @@ if not errorlevel 1 (
   exit /b 1
 )
 
-start "Inkling server" /min "%EXE%" -m "%MODEL%" --host 127.0.0.1 --port %PORT% --parallel 1 -ngl 999 --flash-attn on --jinja --load-mode none -b 2048 %ARGS%
+set "WD=%ROOT%"
+set "AGENTARGS="
+if defined AGENT_DIR set "WD=%AGENT_DIR%"
+if defined AGENT_DIR set "AGENTARGS=--agent"
+
+start "Inkling server" /min /D "%WD%" "%EXE%" -m "%MODEL%" --host 127.0.0.1 --port %PORT% --parallel 1 -ngl 999 --flash-attn on --jinja --load-mode none -b 2048 --alias inkling --ui-config-file "%ROOT%\configs\inkling-ui.json" %AGENTARGS% %ARGS%
 
 echo Loading Inkling, about 30 s...
 for /l %%i in (1,1,90) do (
-  curl -s -m 2 http://127.0.0.1:%PORT%/health 2>nul | find "ok" >nul && goto ready
+  curl -s -m 2 http://127.0.0.1:%PORT%/health 2>nul | findstr /c:"ok" >nul && goto ready
   ping -n 3 127.0.0.1 >nul
 )
 echo Server did not start. Open the "Inkling server" window to see the error.

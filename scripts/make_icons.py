@@ -19,6 +19,8 @@ SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 VARIANTS = {
     "inkling-320k": ("320K", (76, 29, 149), (192, 38, 211)),   # индиго -> фуксия
     "inkling-128k": ("128K", (12, 74, 110), (20, 184, 166)),   # глубокий синий -> бирюза
+    "inkling-cli": ("CLI", (15, 23, 42), (79, 70, 229)),       # почти чёрный -> индиго
+    "inkling-agent": ("AGENT", (124, 45, 18), (234, 88, 12)),  # тёмно-рыжий -> оранжевый
 }
 
 
@@ -71,9 +73,14 @@ def render(label, c1, c2, with_text):
 
     if with_text:
         d = ImageDraw.Draw(base)
-        font = ImageFont.truetype(FONT, int(S * 0.26))
-        font.set_variation_by_name("Bold")
-        w = d.textlength(label, font=font)
+        size = int(S * 0.26)
+        while True:  # длинную подпись уменьшаем, пока не влезет по ширине
+            font = ImageFont.truetype(FONT, size)
+            font.set_variation_by_name("Bold")
+            w = d.textlength(label, font=font)
+            if w <= S * 0.84:
+                break
+            size -= 8
         d.text(((S - w) / 2, S * 0.05), label, font=font, fill=(255, 255, 255, 255))
 
     base.putalpha(ImageChops.multiply(base.getchannel("A"), shape))

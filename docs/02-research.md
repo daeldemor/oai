@@ -325,10 +325,16 @@ llama.cpp-src/build/bin/llama-server.exe -m <IQ3_S.gguf> --port 8080 --parallel 
 
 A/B-замеры: `scripts/ab_server.sh <exe> <тег> "<аргументы>" <заполнение...>`.
 
-Для ежедневного запуска есть `scripts/inkling.cmd` и ярлыки «Inkling 320K» / «Inkling 128K» на рабочем
-столе: сервер стартует в свёрнутом окне «Inkling server», через ~15 с открывается веб-чат
-`http://127.0.0.1:8080/`. Пресет `128k` (KV q8_0, `-ub 384`, эксперты 4 слоёв в RAM): VRAM 15.4 ГБ,
-на 8k prefill 918, генерация 42.
+Запуск на каждый день (2026-11-22): ярлыки «Inkling Agent» (`scripts/inkling-agent.ps1`, веб-чат с
+`--agent`: 7 инструментов llama-server — read_file, file_glob_search, grep_search, exec_shell_command,
+write_file, edit_file, get_info — в выбранной папке, перед каждым вызовом чат спрашивает разрешение) и
+«Inkling CLI» (`scripts/inkling-claude.ps1`, Claude Code через `/v1/messages` llama-server). Оба зовут
+`scripts/inkling.cmd` (пресеты 320k / fast / 128k, `AGENT_DIR` включает агентный режим). Проверено:
+агент в веб-чате сам прошёл список файлов → чтение → запуск скриптов и ответил по-русски; Claude Code
+создал файл по заданию (1 мин 53 с на 128K, первый запрос) и ответил на вопрос за 48 с при живом сервере.
+Пресет `128k` (KV q8_0, `-ub 384`, эксперты 4 слоёв в RAM): VRAM 15.4 ГБ, на 8k prefill 918, генерация 42.
+Модель иногда отвечает по-украински; веб-чат получает системное сообщение «отвечай по-русски» из
+`configs/inkling-ui.json` (`--ui-config-file`).
 
 ## 3. Бюджет памяти (16 ГБ VRAM)
 
