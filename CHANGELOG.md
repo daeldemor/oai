@@ -8,6 +8,8 @@
   Сырой вывод последнего ответа пишется в `logs\inkling-raw-last.txt`. Разбор в `docs/02-research.md` §2.4.4.
 - Прошлые размышления больше не возвращаются модели в истории: с ними она повторяла один и тот же шаг.
   `scripts/inkling_mcp.py` предупреждает модель с третьего одинакового вызова подряд.
+- Сэмплинг Inkling на Strata как у llama-server (temperature 0.8, top_k 40, top_p 0.95, min_p 0.05). Раньше
+  генерация была жадной (temperature 0 по умолчанию в движке) и зацикливалась.
 
 - Ярлыки «Inkling Agent» и «Inkling CLI» переведены на Strata (режимы 320K и 128K): `scripts/inkling-strata.ps1`,
   новые `scripts/inkling-agent.ps1` и `scripts/inkling-claude.ps1`. Старые версии на llama.cpp оставлены

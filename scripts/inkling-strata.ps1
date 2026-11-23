@@ -60,6 +60,10 @@ function Write-InkRunConfig([string]$Mode) {
         }
         # подтверждение в окне Windows и долгие команды: таймаут вызова 30 мин, до 40 шагов инструментов на ответ
         mcp       = [ordered]@{ timeout_s = 1800; max_rounds = 40; max_result_chars = 30000 }
+        # Движок Inkling по умолчанию жадный (temperature 0), карточки сэмплинга для Inkling в Strata нет, веб-чат
+        # своих значений не шлёт. Жадная генерация зацикливалась (одинаковые шаги, «&_fields=meta» без конца).
+        # Значения по умолчанию llama-server, на которой таких циклов не было; поля запроса их перекрывают.
+        sampling  = [ordered]@{ temperature = 0.8; top_p = 0.95; top_k = 40; min_p = 0.05 }
     }
     $json = $cfg | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText($InkRunCfg, $json, (New-Object Text.UTF8Encoding $false))
