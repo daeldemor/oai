@@ -1,0 +1,21 @@
+{
+ "exe": "G:\\Work\\OAI\\strata-ink-build\\strata-inkling.exe",
+ "args": [
+  "--native", "C:\\Users\\rmari\\.lmstudio\\models\\AtomicChat\\Inkling-2-Mini-Uncensored-GGUF\\Inkling-2-Mini-Uncensored-AD-IQ3_S.gguf",
+  "--max-context", "327680",
+  "--kv", "k8v4",
+  "--kv-offload", "off",
+  "--vram-experts-gb", "5.6"
+ ],
+ "env": {"STRATA_INK_PIN_FRAC": "0.6", "STRATA_INK_KV_PREALLOC": "1"},
+ "lib_dirs": ["C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.5\\bin\\x64"],
+ "tokenizer": "C:\\Users\\rmari\\.lmstudio\\packs\\inkling-2-mini-sq-15\\tokenizer",
+ "model_name": "inkling",
+ "arch": "inkling2_loop",
+ "log": "G:\\Work\\OAI\\logs\\strata-ink-serve.log",
+ "port": 8080,
+ "host": "127.0.0.1",
+ "drafting": "off",
+ "parallel": 1,
+ "gpu": 0
+}
