@@ -262,16 +262,17 @@ def result(text: str) -> dict:
     return {"content": [{"type": "text", "text": text[6:].strip() if err else text}], "isError": err}
 
 
-REPEAT = {"key": None, "n": 0}          # тот же вызов подряд: модель зациклилась
+RECENT: list[str] = []                  # последние вызовы: повтор подряд или по кругу (A, B, A, B) = модель зациклилась
 
 
 def repeat_note(name: str, args: dict) -> str:
     key = name + json.dumps(args or {}, sort_keys=True, ensure_ascii=False)
-    REPEAT["n"] = REPEAT["n"] + 1 if key == REPEAT["key"] else 1
-    REPEAT["key"] = key
-    if REPEAT["n"] < 3:
+    n = RECENT.count(key)
+    RECENT.append(key)
+    del RECENT[:-8]
+    if n < 2:
         return ""
-    return (f"[ВНИМАНИЕ: этот же вызов с теми же аргументами уже был {REPEAT['n'] - 1} раз(а) подряд, результат тот же. "
+    return (f"[ВНИМАНИЕ: этот же вызов с теми же аргументами за последние шаги был уже {n} раз(а), результат тот же. "
             "Не повторяйте его: переходите к следующему шагу или дайте ответ.]\n")
 
 

@@ -1,8 +1,8 @@
 diff --git a/serve/inkling_dialect.py b/serve/inkling_dialect.py
-index 719d380..dfc40bd 100644
+index 719d380..e8c6cef 100644
 --- a/serve/inkling_dialect.py
 +++ b/serve/inkling_dialect.py
-@@ -19,8 +19,11 @@ and multiline code losslessly while reusing all downstream OpenAI / Anthropic /
+@@ -19,8 +19,16 @@ and multiline code losslessly while reusing all downstream OpenAI / Anthropic /
  from __future__ import annotations
  
  import json
@@ -10,11 +10,16 @@ index 719d380..dfc40bd 100644
  import re
  
 +_RAW_LOG = os.environ.get("STRATA_INK_RAW_LOG")
++# OAI patch: STRATA_INK_THINK=<none|minimal|low|medium|high|xhigh|max> turns the model's own thinking on at that level
++# (the template's "Thinking effort level"); unset or "none" keeps upstream's thinking-off prompt.
++_THINK_EFFORT = (os.environ.get("STRATA_INK_THINK") or "").strip().lower()
++if _THINK_EFFORT in ("", "none", "off", "0"):
++    _THINK_EFFORT = ""
 +
  MSG_MODEL = "<|message_model|>"
  CONTENT_THINK = "<|content_thinking|>"
  CONTENT_TEXT = "<|content_text|>"
-@@ -119,6 +122,7 @@ class InklingDialect:
+@@ -119,6 +127,7 @@ class InklingDialect:
          self.tool_acc = ""
          self.calls = 0
          self._in_think = False
@@ -22,7 +27,7 @@ index 719d380..dfc40bd 100644
  
      def _tags_for(self):
          if self.state in ("idle", "think"):
-@@ -146,9 +150,21 @@ class InklingDialect:
+@@ -146,9 +155,21 @@ class InklingDialect:
              return -1, None, len(self.buf) - 1
          return -1, None, -1
  
@@ -44,7 +49,7 @@ index 719d380..dfc40bd 100644
          self.buf += text
          out: list[tuple[str, str]] = []
          while True:
-@@ -189,7 +205,9 @@ class InklingDialect:
+@@ -189,7 +210,9 @@ class InklingDialect:
          if not chunk:
              return
          if self.state == "think":
@@ -55,7 +60,18 @@ index 719d380..dfc40bd 100644
              return
          elif self.state in ("idle", "text"):
              out.append(("content", chunk))
-@@ -306,6 +324,11 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+@@ -296,6 +319,10 @@ def template_kwargs(kwargs: dict) -> dict:
+     """Normalize kwargs for Inkling-2-Mini's chat_template.jinja: always enforces thinking off (`reasoning_effort="none"`)."""
+     out = dict(kwargs)
+     out.pop("thinking_mode", None)
++    if _THINK_EFFORT:                       # OAI patch: thinking on at this level, as llama.cpp ran the model
++        out["enable_thinking"] = True
++        out["reasoning_effort"] = _THINK_EFFORT
++        return out
+     out["enable_thinking"] = False
+     out["reasoning_effort"] = DEFAULT_EFFORT
+     return out
+@@ -306,6 +333,11 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
      never raises `tool call arguments must be a parsed object, not a JSON string`."""
      out = []
      for m in messages:
@@ -67,7 +83,7 @@ index 719d380..dfc40bd 100644
          if not isinstance(m, dict) or not m.get("tool_calls"):
              out.append(m)
              continue
-@@ -332,6 +355,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+@@ -332,6 +364,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
      return out
  
  
@@ -101,12 +117,37 @@ index 719d380..dfc40bd 100644
  def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False) -> str:
      """Append an explicit non-thinking turn opener to a rendered Inkling-2-Mini prompt (#6612, #6620, #6627).
  
-@@ -345,9 +395,13 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
+@@ -345,9 +404,38 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
        tokens or looping inside hidden thinking.
      Idempotent if the prompt already carries an opener or when a forced tool-call opener will be appended.
      """
 -    if not prompt or forced:
 +    if not prompt:
++        return prompt
++    out = _finish_prompt(prompt, has_tools=has_tools, forced=forced)
++    _dump_prompt(out)
++    return out
++
++
++def _dump_prompt(prompt: str) -> None:
++    # OAI patch (diagnostics, with STRATA_INK_RAW_LOG): keep the last two rendered prompts next to the raw log,
++    # to find where a new turn's prompt stops matching the previous one (the engine then reads it all again).
++    if not _RAW_LOG:
++        return
++    try:
++        base = os.path.join(os.path.dirname(_RAW_LOG), "inkling-prompt")
++        if os.path.exists(base + "-last.txt"):
++            os.replace(base + "-last.txt", base + "-prev.txt")
++        with open(base + "-last.txt", "w", encoding="utf-8") as f:
++            f.write(prompt)
++    except OSError:
++        pass
++
++
++def _finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False) -> str:
++    if _THINK_EFFORT:
++        # OAI patch: thinking on. The prompt ends as the template renders it (as with llama.cpp): no empty thinking
++        # turn, no opener; the model opens its own thinking message and then answers or calls a tool.
          return prompt
      empty_think = f"{MSG_MODEL}{CONTENT_THINK}{END_MSG}"
 +    if has_tools:

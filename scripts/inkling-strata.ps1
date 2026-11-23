@@ -118,6 +118,9 @@ function Start-InkServer([string]$Mode, [scriptblock]$OnWait = $null) {
     $err = Join-Path $InkLogDir 'strata-ink-server.err'
     # Сырой вывод модели за последний ответ (патч serve/inkling_dialect.py, patches/strata-control-0.1.66-inkling.patch).
     $env:STRATA_INK_RAW_LOG = Join-Path $InkLogDir 'inkling-raw-last.txt'
+    # Размышления модели включены на уровне 0.9, как было на llama.cpp (шаблон по умолчанию). Без этого Strata
+    # пишет «Thinking effort level: 0» и пустой блок размышлений, а модель всё равно думает и зацикливается.
+    $env:STRATA_INK_THINK = 'high'
     Start-Process -FilePath (Join-Path $ctl 'python\python.exe') -WorkingDirectory $ctl -WindowStyle Hidden `
         -ArgumentList @('-m', 'serve.server', '--engine', 'strata', '--config', "`"$InkRunCfg`"",
                         '--host', '127.0.0.1', '--port', '8080', '--no-api-key') `
