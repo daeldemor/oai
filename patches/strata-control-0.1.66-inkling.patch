@@ -1,0 +1,106 @@
+diff --git a/serve/inkling_dialect.py b/serve/inkling_dialect.py
+index 719d380..bee2a47 100644
+--- a/serve/inkling_dialect.py
++++ b/serve/inkling_dialect.py
+@@ -19,8 +19,11 @@ and multiline code losslessly while reusing all downstream OpenAI / Anthropic /
+ from __future__ import annotations
+ 
+ import json
++import os
+ import re
+ 
++_RAW_LOG = os.environ.get("STRATA_INK_RAW_LOG")
++
+ MSG_MODEL = "<|message_model|>"
+ CONTENT_THINK = "<|content_thinking|>"
+ CONTENT_TEXT = "<|content_text|>"
+@@ -119,6 +122,7 @@ class InklingDialect:
+         self.tool_acc = ""
+         self.calls = 0
+         self._in_think = False
++        self._raw_started = False
+ 
+     def _tags_for(self):
+         if self.state in ("idle", "think"):
+@@ -146,9 +150,21 @@ class InklingDialect:
+             return -1, None, len(self.buf) - 1
+         return -1, None, -1
+ 
++    def _log_raw(self, text: str) -> None:
++        # OAI patch: STRATA_INK_RAW_LOG=<file> keeps the raw output of the latest reply (diagnostics only).
++        if not _RAW_LOG or not text:
++            return
++        try:
++            with open(_RAW_LOG, "a" if self._raw_started else "w", encoding="utf-8") as f:
++                f.write(text)
++            self._raw_started = True
++        except OSError:
++            pass
++
+     def feed_channels(self, text: str = "", final: bool = False) -> list[tuple[str, str]]:
+         """Stream raw Inkling-2-Mini output into typed `("reasoning" | "content", text)` chunks.
+         Tool invocations are emitted in the `"content"` channel as `<tool_call>\\n{...}\\n</tool_call>` JSON frames."""
++        self._log_raw(text)
+         self.buf += text
+         out: list[tuple[str, str]] = []
+         while True:
+@@ -189,7 +205,9 @@ class InklingDialect:
+         if not chunk:
+             return
+         if self.state == "think":
+-            # Inkling-2-Mini has no thinking mode (off / "none" only): silently discard any raw <|content_thinking|> span.
++            # OAI patch: the model can still open a thinking span after the empty one in the prompt and run in it for
++            # tens of thousands of tokens. Upstream drops it silently, so the chat looks hung; show it as reasoning.
++            out.append(("reasoning", chunk))
+             return
+         elif self.state in ("idle", "text"):
+             out.append(("content", chunk))
+@@ -332,6 +350,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+     return out
+ 
+ 
++_ROLE_TAG = re.compile(r"<\|message_(user|system|tool|model)\|>")
++
++
++def _think_before_turns(prompt: str, empty_think: str) -> str:
++    """OAI patch: with tools, every reply was generated after the empty thinking turn that finish_prompt appends, but
++    the template renders past replies without it. The next prompt then differs from the cached one right there and
++    the engine reads the whole conversation again on every tool round (reused=0). Put the same empty turn in front
++    of each past reply, so the previous prompt is a prefix of the next one and its checkpoint is reused."""
++    out, cut, prev_end, prev_model, turn_open = [], 0, 0, False, False
++    for m in _ROLE_TAG.finditer(prompt):
++        is_model = m.group(1) == "model"
++        if prev_model and END_SAMPLING in prompt[prev_end:m.start()]:
++            turn_open = False                      # the previous reply ended: this header starts a new one
++        if is_model:
++            if not turn_open and m.end() < len(prompt):    # (a bare opener at the end is finish_prompt's to close)
++                if not prompt.startswith(f"{CONTENT_THINK}{END_MSG}", m.end()):
++                    out.append(prompt[cut:m.start()])
++                    out.append(empty_think)
++                    cut = m.start()
++                turn_open = True
++        else:
++            turn_open = False
++        prev_model, prev_end = is_model, m.end()
++    out.append(prompt[cut:])
++    return "".join(out)
++
++
+ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False) -> str:
+     """Append an explicit non-thinking turn opener to a rendered Inkling-2-Mini prompt (#6612, #6620, #6627).
+ 
+@@ -345,9 +390,13 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
+       tokens or looping inside hidden thinking.
+     Idempotent if the prompt already carries an opener or when a forced tool-call opener will be appended.
+     """
+-    if not prompt or forced:
++    if not prompt:
+         return prompt
+     empty_think = f"{MSG_MODEL}{CONTENT_THINK}{END_MSG}"
++    if has_tools:
++        prompt = _think_before_turns(prompt, empty_think)
++    if forced:
++        return prompt
+     if prompt.endswith((CONTENT_TEXT, CONTENT_TOOL_JSON, CONTENT_TOOL_TEXT, empty_think)):
+         return prompt
+     if prompt.endswith(MSG_MODEL):

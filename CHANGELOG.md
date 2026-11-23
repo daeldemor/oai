@@ -2,6 +2,11 @@
 
 ## 2026-11-23
 
+- Патч `serve/inkling_dialect.py` Strata control 0.1.66 (`patches/strata-control-0.1.66-inkling.patch`).
+  Шаги с инструментами теперь переиспользуют кэш промпта: раньше `reused` был 0, каждый шаг заново читал
+  25–40K токенов. Размышления модели видны в чате: раньше они пропадали, и долгий ответ выглядел зависшим.
+  Сырой вывод последнего ответа пишется в `logs\inkling-raw-last.txt`. Разбор в `docs/02-research.md` §2.4.4.
+
 - Ярлыки «Inkling Agent» и «Inkling CLI» переведены на Strata (режимы 320K и 128K): `scripts/inkling-strata.ps1`,
   новые `scripts/inkling-agent.ps1` и `scripts/inkling-claude.ps1`. Старые версии на llama.cpp оставлены
   как `*-llama.ps1`.
