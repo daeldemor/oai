@@ -9,6 +9,7 @@ ap.add_argument("--fill", type=int, default=0)
 ap.add_argument("--gen", type=int, default=256)
 ap.add_argument("--key", default="")
 ap.add_argument("--model", default="inkling")
+ap.add_argument("--salt", default="", help="префикс, чтобы не попасть в кэш промпта")
 ap.add_argument("--prompt", default="Напиши на Python функцию быстрой сортировки с комментариями и тестами.")
 a = ap.parse_args()
 
@@ -17,7 +18,7 @@ if a.fill:
     para = ("The history of the lighthouse begins with simple fires on hilltops. Sailors relied on them to avoid "
             "rocks and to find harbours at night; over centuries the towers grew taller and the lamps brighter. ")
     filler = para * max(1, a.fill // 40) + "\n\nSummarize the text above in one sentence, then: "
-msgs = [{"role": "user", "content": filler + a.prompt}]
+msgs = [{"role": "user", "content": a.salt + filler + a.prompt}]
 body = {"model": a.model, "messages": msgs, "max_tokens": a.gen, "temperature": 0, "stream": True,
         "stream_options": {"include_usage": True}, "reasoning_effort": "none"}
 req = urllib.request.Request(a.url.rstrip("/") + "/v1/chat/completions", data=json.dumps(body).encode(),
