@@ -52,6 +52,13 @@ def resolve(p: str | None) -> Path:
     return q if q.is_absolute() else workdir() / q
 
 
+def preview(text: str, limit: int) -> str:
+    """Начало текста для окна подтверждения; скрытый остаток назван явно, чтобы не одобрить его вслепую."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... [НЕ ПОКАЗАНО ещё {len(text) - limit} символов: проверьте в чате или откажите]"
+
+
 def clip(text: str, limit: int = MAX_OUT) -> str:
     if len(text) <= limit:
         return text
@@ -78,7 +85,7 @@ def confirm(title: str, details: str) -> bool:
         return True
     if sys.platform != "win32":
         return False
-    text = clip(details, 1500) + "\n\nРазрешить?"
+    text = details + "\n\nРазрешить?"
     flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND
     return ctypes.windll.user32.MessageBoxW(None, text, "Inkling: " + title, flags) == IDYES
 
@@ -172,7 +179,7 @@ def t_write(a: dict) -> str:
     p = resolve(a.get("path"))
     content = a.get("content", "")
     action = "перезаписать" if p.exists() else "создать"
-    if not confirm("запись файла", f"{action} файл:\n{p}\n\n{len(content)} символов:\n{content[:600]}"):
+    if not confirm("запись файла", f"{action} файл:\n{p}\n\n{len(content)} символов:\n{preview(content, 1200)}"):
         raise Denied
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8", newline="")
@@ -188,7 +195,7 @@ def t_edit(a: dict) -> str:
         return f"error: old_string не найден в {p}"
     if n > 1 and not a.get("replace_all"):
         return f"error: old_string встречается {n} раз в {p}; уточните его или передайте replace_all=true"
-    if not confirm("правка файла", f"файл:\n{p}\n\nбыло:\n{old[:500]}\n\nстанет:\n{new[:500]}"):
+    if not confirm("правка файла", f"файл:\n{p}\n\nбыло:\n{preview(old, 600)}\n\nстанет:\n{preview(new, 600)}"):
         raise Denied
     text = text.replace(old, new) if a.get("replace_all") else text.replace(old, new, 1)
     p.write_text(text, encoding="utf-8", newline="")
@@ -199,7 +206,7 @@ def t_exec(a: dict) -> str:
     cmd = a["command"]
     cwd = resolve(a.get("cwd"))
     timeout = min(max(int(a.get("timeout_s") or 120), 1), 1800)
-    if not confirm("команда", f"папка: {cwd}\n\n{cmd}"):
+    if not confirm("команда", f"папка: {cwd}\n\n{preview(cmd, 2000)}"):
         raise Denied
     full = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; " + cmd
     try:
