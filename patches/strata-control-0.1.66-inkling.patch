@@ -1,5 +1,5 @@
 diff --git a/serve/inkling_dialect.py b/serve/inkling_dialect.py
-index 719d380..bee2a47 100644
+index 719d380..dfc40bd 100644
 --- a/serve/inkling_dialect.py
 +++ b/serve/inkling_dialect.py
 @@ -19,8 +19,11 @@ and multiline code losslessly while reusing all downstream OpenAI / Anthropic /
@@ -55,7 +55,19 @@ index 719d380..bee2a47 100644
              return
          elif self.state in ("idle", "text"):
              out.append(("content", chunk))
-@@ -332,6 +350,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+@@ -306,6 +324,11 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+     never raises `tool call arguments must be a parsed object, not a JSON string`."""
+     out = []
+     for m in messages:
++        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("reasoning_content"):
++            # OAI patch: past reasoning is shown in the chat but not given back to the model. With it in the history
++            # the model copied its previous thought word for word and repeated the same tool call (8 identical
++            # rounds of 475 tokens). Upstream never had it there, since it dropped thinking altogether.
++            m = {k: v for k, v in m.items() if k != "reasoning_content"}
+         if not isinstance(m, dict) or not m.get("tool_calls"):
+             out.append(m)
+             continue
+@@ -332,6 +355,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
      return out
  
  
@@ -89,7 +101,7 @@ index 719d380..bee2a47 100644
  def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False) -> str:
      """Append an explicit non-thinking turn opener to a rendered Inkling-2-Mini prompt (#6612, #6620, #6627).
  
-@@ -345,9 +390,13 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
+@@ -345,9 +395,13 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
        tokens or looping inside hidden thinking.
      Idempotent if the prompt already carries an opener or when a forced tool-call opener will be appended.
      """

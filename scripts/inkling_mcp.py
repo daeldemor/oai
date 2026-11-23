@@ -262,12 +262,27 @@ def result(text: str) -> dict:
     return {"content": [{"type": "text", "text": text[6:].strip() if err else text}], "isError": err}
 
 
+REPEAT = {"key": None, "n": 0}          # тот же вызов подряд: модель зациклилась
+
+
+def repeat_note(name: str, args: dict) -> str:
+    key = name + json.dumps(args or {}, sort_keys=True, ensure_ascii=False)
+    REPEAT["n"] = REPEAT["n"] + 1 if key == REPEAT["key"] else 1
+    REPEAT["key"] = key
+    if REPEAT["n"] < 3:
+        return ""
+    return (f"[ВНИМАНИЕ: этот же вызов с теми же аргументами уже был {REPEAT['n'] - 1} раз(а) подряд, результат тот же. "
+            "Не повторяйте его: переходите к следующему шагу или дайте ответ.]\n")
+
+
 def call(name: str, args: dict) -> dict:
     fn = BY_NAME.get(name)
     if fn is None:
         return result(f"error: нет инструмента {name}")
+    note = repeat_note(name, args)
     try:
-        return result(fn(args or {}))
+        text = fn(args or {})
+        return result(text if text.startswith("error:") or not note else note + text)
     except Denied:
         return result("error: пользователь отклонил это действие")
     except Exception as e:  # ошибка инструмента уходит модели текстом
