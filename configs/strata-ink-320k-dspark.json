@@ -8,7 +8,7 @@
   "--vram-experts-gb", "3.3",
   "--dspark", "X:\\OAI-models\\inkling-dspark\\dspark-Inkling-2-Mini-Q8_0.gguf"
  ],
- "env": {"STRATA_INK_PIN_FRAC": "0.6", "STRATA_INK_KV_PREALLOC": "1"},
+ "env": {"STRATA_INK_PIN_FRAC": "0.6", "STRATA_INK_KV_PREALLOC": "1", "STRATA_INK_TRIM_WS": "1"},
  "lib_dirs": ["C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.5\\bin\\x64"],
  "tokenizer": "C:\\Users\\rmari\\.lmstudio\\packs\\inkling-2-mini-sq-15\\tokenizer",
  "model_name": "inkling",

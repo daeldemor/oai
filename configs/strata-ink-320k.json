@@ -7,7 +7,7 @@
   "--kv-offload", "off",
   "--vram-experts-gb", "5.6"
  ],
- "env": {"STRATA_INK_PIN_FRAC": "0.6", "STRATA_INK_KV_PREALLOC": "1"},
+ "env": {"STRATA_INK_PIN_FRAC": "0.6", "STRATA_INK_KV_PREALLOC": "1", "STRATA_INK_TRIM_WS": "1"},
  "lib_dirs": ["C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.5\\bin\\x64"],
  "tokenizer": "C:\\Users\\rmari\\.lmstudio\\packs\\inkling-2-mini-sq-15\\tokenizer",
  "model_name": "inkling",

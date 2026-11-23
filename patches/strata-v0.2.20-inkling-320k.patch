@@ -18,7 +18,7 @@ index 5cbbab34c..c4a95ef83 100644
          const bool try_pin = (avail == 0 || (double)bytes < 0.45 * (double)avail);
  #endif
 diff --git a/engine/src/inkling2/cuda/ink_runner.cuh b/engine/src/inkling2/cuda/ink_runner.cuh
-index 5cce0a823..1ca856f78 100644
+index 5cce0a823..855bafa5d 100644
 --- a/engine/src/inkling2/cuda/ink_runner.cuh
 +++ b/engine/src/inkling2/cuda/ink_runner.cuh
 @@ -937,6 +937,8 @@ struct InkCudaModel {
@@ -30,7 +30,23 @@ index 5cce0a823..1ca856f78 100644
              man.dspark[kv.first] = std::move(ti);
          }
  
-@@ -1977,6 +1979,9 @@ struct InkCudaRunner {
+@@ -1569,6 +1571,15 @@ struct InkCudaModel {
+                          n_vram_experts, primary_gpu, n_peer_experts, peer_gpu, n_host_experts, t_exp,
+                          (int)ep2_active, (int)ep2_p2p, (int)hybrid.active, (int)sm120::available());
+         }
++#ifdef _WIN32
++        // STRATA_INK_TRIM_WS=1 (opt-in): the GGUF stays mapped after load, and its pages sit in the working set
++        // (12+ GB that Windows does not count as available). Weights are already in VRAM and the host arena, so drop
++        // the working set once; pinned memory stays, anything touched again comes back by a soft fault.
++        if (const char* tw = std::getenv("STRATA_INK_TRIM_WS"); tw && std::atoi(tw) > 0) {
++            const BOOL ok = SetProcessWorkingSetSize(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1);
++            std::fprintf(stderr, "[InkCUDA] working set trimmed after load (%s)\n", ok ? "ok" : "failed");
++        }
++#endif
+         return true;
+     }
+ 
+@@ -1977,6 +1988,9 @@ struct InkCudaRunner {
                               (int)kv_dtype, kv_host_ctx, (double)((size_t)kv_host_ctx * per_pos_all_glob) / (1024.0 * 1024.0));
              } else if (vram_fit_ctx >= max_ctx) {
                  kv_dev_ctx = std::max(256, std::min(max_ctx, (max_slots == 1) ? 8192 : 4096));
@@ -40,7 +56,7 @@ index 5cce0a823..1ca856f78 100644
                  kv_host_ctx = 0;
                  kv_alloc_ctx = kv_dev_ctx;
              } else if (kv_offload_mode == 0 && host_fit_ctx >= 256) {
-@@ -2001,6 +2006,9 @@ struct InkCudaRunner {
+@@ -2001,6 +2015,9 @@ struct InkCudaRunner {
                      max_ctx = clamped;
                  }
                  kv_dev_ctx = std::max(256, std::min(max_ctx, (max_slots == 1) ? 8192 : 4096));
