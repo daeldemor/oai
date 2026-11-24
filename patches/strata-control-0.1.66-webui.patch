@@ -24,7 +24,7 @@ index 814f034..06bd5b1 100644
                  if not self._authorized():
                      return
 diff --git a/serve/web/app.js b/serve/web/app.js
-index f9b8f39..eb74fae 100644
+index f9b8f39..69922a5 100644
 --- a/serve/web/app.js
 +++ b/serve/web/app.js
 @@ -365,7 +365,8 @@ function render(m) {
@@ -279,7 +279,7 @@ index f9b8f39..eb74fae 100644
          ({type: "image_url", image_url: {url: "strata-tool-media:" + im.url.split("/").pop()}}))] : t.result;
        out.push({role: "tool", tool_call_id: t.id, content});
      }
-@@ -1306,6 +1456,121 @@ function assistantMessages(m) {
+@@ -1306,6 +1456,122 @@ function assistantMessages(m) {
    return out;
  }
  
@@ -290,7 +290,8 @@ index f9b8f39..eb74fae 100644
 +// the conversation cache holds, so the model reads little of it again.
 +// Pruning, the fallback: the oldest tool results are replaced by a short note (the page still shows them) - when the summary
 +// request itself would not fit, or before a request that still goes past PRUNE_AT. The prompt changes only at such a step.
-+const PRUNE_AT = 0.75, PRUNE_TO = 0.5, PRUNE_KEEP = 4, COMPACT_AT = 0.75, COMPACT_MAX = 12000;
++// compaction at 90%: the 320K context is there to be used; pruning only past 95%, when a summary did not come
++const PRUNE_AT = 0.95, PRUNE_TO = 0.5, PRUNE_KEEP = 4, COMPACT_AT = 0.9, COMPACT_MAX = 12000;
 +const COMPACT_PROMPT = "Разговор выше пора сжать: дальше он продолжится только с твоим изложением вместо всей этой истории. " +
 +  "Напиши изложение, по которому можно продолжить работу без потерь. Сохрани:\n" +
 +  "- задачу пользователя, его требования, ограничения и предпочтения, по возможности его словами;\n" +
@@ -401,7 +402,7 @@ index f9b8f39..eb74fae 100644
  function busyHint() {
    const mode = settings.whileBusy;
    return mode === "queue" ? tr("composer.hintQueue", "Enter sends when the answer is done")
-@@ -1405,13 +1670,19 @@ async function send(payload) {
+@@ -1405,13 +1671,19 @@ async function send(payload) {
    if (panel) return;                                  // something is open above (an edit): finish it first
    if (busy) { park(p, own); return; }
    clearUndo();
@@ -422,7 +423,7 @@ index f9b8f39..eb74fae 100644
    return generateReply();
  }
  // #5508: Stop stays a plain stop. When it left thinking but no answer, the reply offers "Answer from this thinking": one new request,
-@@ -1432,11 +1703,20 @@ async function generateReply(opts = {}) {
+@@ -1432,11 +1704,20 @@ async function generateReply(opts = {}) {
    renderChat();
    const el = $("chat").lastElementChild;
    const controller = new AbortController();
@@ -445,7 +446,7 @@ index f9b8f39..eb74fae 100644
                  reasoning_effort: finishing ? "none" : settings.thinking};
    if (!(settings.temperature > 0)) {
      body.temperature = 0;
-@@ -1445,6 +1725,8 @@ async function generateReply(opts = {}) {
+@@ -1445,6 +1726,8 @@ async function generateReply(opts = {}) {
    }
    if (settings.seed) body.seed = +settings.seed;
    if (settings.max) body.max_tokens = +settings.max;
@@ -454,7 +455,7 @@ index f9b8f39..eb74fae 100644
    if (finishing) {                                     // low and fixed: the answer is read off what was worked out (#5508)
      body.temperature = 0.2;
      delete body.top_p; delete body.top_k;
-@@ -1452,7 +1734,8 @@ async function generateReply(opts = {}) {
+@@ -1452,7 +1735,8 @@ async function generateReply(opts = {}) {
    if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
    if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
  
@@ -464,18 +465,22 @@ index f9b8f39..eb74fae 100644
    const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
    try {
      const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true), body: JSON.stringify(body),
-@@ -1504,7 +1787,18 @@ async function generateReply(opts = {}) {
+@@ -1504,7 +1788,22 @@ async function generateReply(opts = {}) {
      }
    } catch (e) {
      if (e.name === "AbortError") m.stopped = true;
 -    else { m.error = e.message || String(e); toast("error", tr("toast.requestFailed", "The request failed"), m.error, 6000); }
 +    else {
 +      m.error = e.message || String(e);
-+      const over = !opts.compact && noteOverflow(m, body.messages);
-+      // nothing of the answer came: compact and ask again; else the next message compacts first (its estimate is past the limit)
-+      overflow = over && !finishing && !opts.retried && !m.text && !(m.tools || []).some((t) => t.round != null) ? "compact" : over ? "later" : false;
++      const over = noteOverflow(m, body.messages);
++      // nothing of the answer came: compact and ask again; else the next message compacts first (its estimate is past the limit).
++      // The summary request itself refused (the estimate was a little low): prune the old tool results and ask for it once more.
++      overflow = opts.compact ? (over && !opts.retried ? "refit" : false)
++        : over && !finishing && !opts.retried && !m.text && !(m.tools || []).some((t) => t.round != null) ? "compact" : over ? "later" : false;
 +      if (overflow === "compact") toast("info", tr("chat.compactingTitle", "Compacting the history"),
 +        tr("chat.compactOverflow", "The chat outgrew the context. The model writes a summary of it, then the message goes again."), 8000);
++      else if (overflow === "refit") toast("info", tr("chat.compactingTitle", "Compacting the history"),
++        tr("chat.compactRefit", "The history did not fit for a summary: old tool results were left out of it, asking again."), 8000);
 +      else toast("error", tr("toast.requestFailed", "The request failed"),
 +        overflow === "later" ? `${m.error}\n\n${tr("chat.overflowNext", "Send the next message: the history is compacted first.")}`
 +        : opts.compact && /exceeds the context window/.test(m.error) ? `${m.error}\n\n${tr("chat.compactTooBig", "Even without the old tool results the history is too long for a summary. Start a new chat.")}`
@@ -484,7 +489,7 @@ index f9b8f39..eb74fae 100644
    }
    const cut = busy.cut;                                      // an interjection ended it: kept as written, marked interrupted
    if (cut) m.interrupted = true;
-@@ -1518,6 +1812,14 @@ async function generateReply(opts = {}) {
+@@ -1518,6 +1817,14 @@ async function generateReply(opts = {}) {
    } else if (m.stopped) {
      m.meta = cut ? tr("chat.interrupted", "Interrupted") : tr("chat.stopped", "Stopped");
    }
@@ -499,10 +504,16 @@ index f9b8f39..eb74fae 100644
    for (const t of m.tools || []) if (t.state === "writing" || t.state === "running") { t.state = "skipped"; t.ms = null; }
    const ran = (m.tools || []).filter((t) => t.state === "done" || t.state === "error").length;
    if (ran) m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.toolCalls", {one: "{n} tool call", other: "{n} tool calls"}, {n: ran})}`;
-@@ -1528,6 +1830,17 @@ async function generateReply(opts = {}) {
+@@ -1528,6 +1835,23 @@ async function generateReply(opts = {}) {
    paintLive();
    if (frame) cancelAnimationFrame(frame);
    updateAssistant(el, m, false);
++  if (opts.compact && overflow === "refit") {
++    messages.splice(messages.indexOf(m), 1);
++    pruneHistory(PRUNE_TO * (health.max_context || 0), tokensPerChar(), 0);
++    saveChat();
++    return generateReply({compact: true, retried: true});
++  }
 +  if (opts.compact) { scrollDown(); return finishCompact(m, before); }
 +  if (overflow === "compact") {                    // the refused answer goes, the question waits while the history is compacted
 +    messages.splice(messages.indexOf(m), 1);
@@ -570,7 +581,7 @@ index cd9140c..f131c73 100644
 +.st-msg.oai-compacted { opacity: .45; }
 +.st-msg.oai-summary .st-bubble { border-left: 3px solid rgba(127, 127, 127, .55); padding-left: 14px; }
 diff --git a/serve/web/locales/ru.json b/serve/web/locales/ru.json
-index 7146eb1..b656136 100644
+index 7146eb1..bed23f6 100644
 --- a/serve/web/locales/ru.json
 +++ b/serve/web/locales/ru.json
 @@ -14,6 +14,10 @@
@@ -642,7 +653,7 @@ index 7146eb1..b656136 100644
    "hist.lostText": "Браузер сохранил только имена, без содержимого. Начните новый чат и прикрепите их снова.",
    "hist.lostText2": "Браузер сохранил только имена, без содержимого. Прикрепите их снова.",
    "hist.lostTitle": "Вложения нужно добавить заново",
-@@ -135,6 +165,32 @@
+@@ -135,6 +165,33 @@
    "hist.rewind": "Вернуться сюда",
    "hist.rewindTitle": "Вернуться к этому месту в чате",
    "hist.save": "Сохранить",
@@ -660,6 +671,7 @@ index 7146eb1..b656136 100644
 +  "chat.compactOverflow": "Чат перерос контекст. Модель пишет изложение истории, потом сообщение уйдёт ещё раз.",
 +  "chat.summaryMeta": "Изложение истории: модель читает его вместо {n} сообщений выше (было около {tokens} токенов)",
 +  "chat.compactedTitle": "История сжата",
++  "chat.compactRefit": "История не поместилась в запрос на изложение: из неё убраны старые результаты инструментов, запрос отправлен ещё раз.",
 +  "chat.compactStopped": "Сжатие остановлено",
 +  "chat.compactStoppedText": "История осталась как была.",
 +  "chat.overflowNext": "Отправьте следующее сообщение: сначала история будет сжата.",
@@ -675,7 +687,7 @@ index 7146eb1..b656136 100644
    "math.source": "Исходный текст формулы ({reason})",
    "model.alreadyUnloaded": "Уже выгружена",
    "model.busy": "Модель занята",
-@@ -207,7 +263,16 @@
+@@ -207,7 +264,16 @@
    "sidebar.delete": "Удалить этот чат",
    "sidebar.deleteShort": "Удалить",
    "sidebar.expand": "Открыть список чатов",
@@ -693,7 +705,7 @@ index 7146eb1..b656136 100644
    "sidebar.nameFor": "Название этого чата",
    "sidebar.noMatch": "Подходящих чатов нет",
    "sidebar.none": "Чатов пока нет",
-@@ -246,12 +311,5 @@
+@@ -246,12 +312,5 @@
    "tool.running": "Выполняется",
    "tool.skipped": "Не выполнен",
    "tool.writing": "Пишется",
