@@ -24,10 +24,20 @@ index 814f034..06bd5b1 100644
                  if not self._authorized():
                      return
 diff --git a/serve/web/app.js b/serve/web/app.js
-index f9b8f39..429fa70 100644
+index f9b8f39..9ae3e17 100644
 --- a/serve/web/app.js
 +++ b/serve/web/app.js
-@@ -376,6 +376,7 @@ function render(m) {
+@@ -365,7 +365,8 @@ function render(m) {
+   } else if (imageLive(live)) {
+     setPill("reading", tr("pill.image", "Generating image…"));
+   } else if (live.state === "reading") {
+-    const pct = live.prompt_total ? Math.round((100 * live.prompt_read) / live.prompt_total) : null;
++    const nr = newReading(live);
++    const pct = nr ? Math.round(100 * nr.pct) : null;
+     setPill("reading", pct != null ? tr("pill.readingPct", "Reading prompt · {pct}%", {pct}) : tr("pill.reading", "Reading prompt"));
+   } else if (live.state === "generating") {
+     setPill("generating", tr("pill.generating", "Generating · {rate} tok/s", {rate: fmt(live.tok_s, 1)}));
+@@ -376,6 +377,7 @@ function render(m) {
    }
    modelButton(live);
    if (!modelOp && !localLoad && live.queued > 0) setPill("queued", tr("pill.queued", "{n} queued", {n: live.queued}));
@@ -35,7 +45,7 @@ index f9b8f39..429fa70 100644
    if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
    if (tab === "monitor") renderConvCache(m.conversation_cache);
    if (tab === "about") renderAbout(eng, hw, st);
-@@ -1044,7 +1045,10 @@ function msgEl(m, i) {
+@@ -1044,7 +1046,10 @@ function msgEl(m, i) {
    } else {
      el.innerHTML = `<details class="st-collapse think" hidden><summary>${icon("thinking", "st-icon st-icon--sm")}<span class="think-title"></span>` +
        `${icon("chevron", "st-icon st-icon--sm st-chev")}</summary><div class="st-collapse__body thinking"></div></details>` +
@@ -47,7 +57,7 @@ index f9b8f39..429fa70 100644
        `<button class="st-btn st-btn--secondary msg-finish" type="button" data-msg-finish hidden ` +
        `title="${esc(tr("chat.finishFromThinkingTitle", "Write an answer from what the model worked out before you stopped it. It doesn't think any further."))}">` +
        `${esc(tr("chat.finishFromThinking", "Answer from this thinking"))}</button>` +
-@@ -1141,6 +1145,131 @@ function onTool(m, x) {
+@@ -1141,6 +1146,144 @@ function onTool(m, x) {
                        state: x.skipped ? "skipped" : x.ok ? "done" : "error"});
    }
  }
@@ -140,6 +150,14 @@ index f9b8f39..429fa70 100644
 +  });
 +  while (old.length > parts.length) bubble.removeChild(old.pop().node);
 +}
++// Progress of reading the prompt counted over the tokens the engine actually reads. The server's prompt_read starts
++// at the cached prefix (live.reused), so 200 668 of 203 411 looked like a full re-read when only 16K tokens were new.
++function newReading(live) {
++  if (!live || !live.prompt_total) return null;
++  const total = live.prompt_total, cached = Math.min(Math.max(live.reused || 0, 0), total);
++  const read = Math.min(Math.max((live.prompt_read || 0) - cached, 0), total - cached);
++  return {cached, read, total: total - cached, pct: total > cached ? read / (total - cached) : 1};
++}
 +// what the model is doing right now, in the reply itself (the header pill is easy to miss): reading the prompt with
 +// a progress bar, thinking or writing with the speed, a tool running with its time
 +function paintStatus(el, m, streaming) {
@@ -153,10 +171,15 @@ index f9b8f39..429fa70 100644
 +    running.t0 = running.t0 || Date.now();
 +    text = tr("live.tool", "Running {name} · {s} s", {name: running.tool || running.name || "tool", s: fmt((Date.now() - running.t0) / 1000, 0)});
 +  } else if (live.state === "reading") {
-+    if (live.prompt_total) {
-+      pct = live.prompt_read / live.prompt_total;
++    const nr = newReading(live);
++    if (nr && nr.cached) {
++      pct = nr.pct;
++      text = tr("live.readingNew", "Reading the prompt · {pct}% · {read} of {total} new tokens · {cached} from cache",
++                {pct: Math.round(100 * pct), read: fmt(nr.read), total: fmt(nr.total), cached: fmt(nr.cached)});
++    } else if (nr) {
++      pct = nr.pct;
 +      text = tr("live.readingPct", "Reading the prompt · {pct}% · {read} of {total} tokens",
-+                {pct: Math.round(100 * pct), read: fmt(live.prompt_read), total: fmt(live.prompt_total)});
++                {pct: Math.round(100 * pct), read: fmt(nr.read), total: fmt(nr.total)});
 +    } else {
 +      text = tr("live.reading", "Reading the prompt · {n} tokens", {n: fmt(live.prompt_tokens || 0)});
 +    }
@@ -179,7 +202,7 @@ index f9b8f39..429fa70 100644
  function updateAssistant(el, m, streaming) {
    const det = el.querySelector("details.think");
    if (m.reasoning) {
-@@ -1149,7 +1278,7 @@ function updateAssistant(el, m, streaming) {
+@@ -1149,7 +1292,7 @@ function updateAssistant(el, m, streaming) {
      el.querySelector(".think-title").textContent = thinkingNow ? tr("think.now", "Thinking…") :
        m.thinkSecs != null ? tr("think.for", "Thought for {s} s", {s: fmt(m.thinkSecs, 1)}) : tr("think.done", "Thoughts");
      const body = el.querySelector(".thinking");
@@ -188,7 +211,7 @@ index f9b8f39..429fa70 100644
      else body.dataset.pending = "1";
      // open while it streams (if wanted), closed once the answer starts - unless the user toggled it themselves
      if (thinkingNow && settings.show && !det.dataset.touched && !det.open) { det._auto = true; det.open = true; }
-@@ -1157,16 +1286,17 @@ function updateAssistant(el, m, streaming) {
+@@ -1157,16 +1300,17 @@ function updateAssistant(el, m, streaming) {
    }
    const bubble = el.querySelector(".st-bubble");
    if (m.error) {
@@ -210,7 +233,7 @@ index f9b8f39..429fa70 100644
    el.querySelector(".meta-text").textContent = m.meta || (streaming ? "" : m.stopped ? tr("chat.stopped", "Stopped") : "");
    el.querySelector("[data-msg-copy]").hidden = streaming || !m.text;
    const finish = el.querySelector("[data-msg-finish]");
-@@ -1257,7 +1387,7 @@ $("chat").addEventListener("toggle", (e) => {
+@@ -1257,7 +1401,7 @@ $("chat").addEventListener("toggle", (e) => {
    if (d._auto) { d._auto = false; return; }          // our own open/close, not the user's
    d.dataset.touched = "1";
    const body = d.querySelector(".thinking");
@@ -219,7 +242,7 @@ index f9b8f39..429fa70 100644
  }, true);
  
  function apiMessages() {
-@@ -1432,7 +1562,7 @@ async function generateReply(opts = {}) {
+@@ -1432,7 +1576,7 @@ async function generateReply(opts = {}) {
    renderChat();
    const el = $("chat").lastElementChild;
    const controller = new AbortController();
@@ -228,7 +251,7 @@ index f9b8f39..429fa70 100644
    setBusy(true);
    paintLive();
  
-@@ -1453,6 +1583,7 @@ async function generateReply(opts = {}) {
+@@ -1453,6 +1597,7 @@ async function generateReply(opts = {}) {
    if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
  
    let firstAt = null, thinkStart = null, usage = null, frame = 0;
@@ -236,7 +259,7 @@ index f9b8f39..429fa70 100644
    const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
    try {
      const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true), body: JSON.stringify(body),
-@@ -1518,6 +1649,12 @@ async function generateReply(opts = {}) {
+@@ -1518,6 +1663,12 @@ async function generateReply(opts = {}) {
    } else if (m.stopped) {
      m.meta = cut ? tr("chat.interrupted", "Interrupted") : tr("chat.stopped", "Stopped");
    }
@@ -298,7 +321,7 @@ index cd9140c..980cfca 100644
 +  .cursor::after, .tool-call .st-badge::before { animation: none; }
 +}
 diff --git a/serve/web/locales/ru.json b/serve/web/locales/ru.json
-index 7146eb1..884e39d 100644
+index 7146eb1..3816c52 100644
 --- a/serve/web/locales/ru.json
 +++ b/serve/web/locales/ru.json
 @@ -14,6 +14,10 @@
@@ -370,7 +393,7 @@ index 7146eb1..884e39d 100644
    "hist.lostText": "Браузер сохранил только имена, без содержимого. Начните новый чат и прикрепите их снова.",
    "hist.lostText2": "Браузер сохранил только имена, без содержимого. Прикрепите их снова.",
    "hist.lostTitle": "Вложения нужно добавить заново",
-@@ -135,6 +165,17 @@
+@@ -135,6 +165,18 @@
    "hist.rewind": "Вернуться сюда",
    "hist.rewindTitle": "Вернуться к этому месту в чате",
    "hist.save": "Сохранить",
@@ -378,6 +401,7 @@ index 7146eb1..884e39d 100644
 +  "live.queued": "Ждёт в очереди",
 +  "live.reading": "Читает промпт · {n} токенов",
 +  "live.readingPct": "Читает промпт · {pct}% · {read} из {total} токенов",
++  "live.readingNew": "Читает промпт · {pct}% · {read} из {total} новых токенов · {cached} из кэша",
 +  "live.thinking": "Размышляет",
 +  "live.tokens": "{n} ток.",
 +  "live.tool": "Выполняет {name} · {s} с",
@@ -388,7 +412,7 @@ index 7146eb1..884e39d 100644
    "math.source": "Исходный текст формулы ({reason})",
    "model.alreadyUnloaded": "Уже выгружена",
    "model.busy": "Модель занята",
-@@ -207,7 +248,16 @@
+@@ -207,7 +249,16 @@
    "sidebar.delete": "Удалить этот чат",
    "sidebar.deleteShort": "Удалить",
    "sidebar.expand": "Открыть список чатов",
@@ -406,7 +430,7 @@ index 7146eb1..884e39d 100644
    "sidebar.nameFor": "Название этого чата",
    "sidebar.noMatch": "Подходящих чатов нет",
    "sidebar.none": "Чатов пока нет",
-@@ -246,12 +296,5 @@
+@@ -246,12 +297,5 @@
    "tool.running": "Выполняется",
    "tool.skipped": "Не выполнен",
    "tool.writing": "Пишется",
