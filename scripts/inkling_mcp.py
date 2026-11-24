@@ -8,6 +8,10 @@ exec_shell_command, get_info. Доступ ко всему компьютеру,
 Без bypass перед write_file, edit_file и exec_shell_command показывается окно Windows «Разрешить?»; чтение и поиск
 идут без вопросов.
 
+Результат длиннее 8000 символов (INKLING_TOOL_INLINE_MAX) не идёт в историю целиком, как в Claude Code: он
+сохраняется в %LOCALAPPDATA%\\inkling\\tool-results\\<дата>\\, модель получает путь, начало и конец. read_file
+отдаёт файл частями не больше этого порога. Папки результатов старше 7 дней удаляются при запуске.
+
 Запуск (его делает сервер Strata по "mcp_servers" в конфиге):  python -I scripts/inkling_mcp.py
 """
 from __future__ import annotations
@@ -26,8 +30,17 @@ from pathlib import Path
 
 STATE = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "inkling" / "agent-state.json"
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache"}
-MAX_OUT = 30000
 PROTOCOL = "2025-06-18"
+
+# Большие результаты как в Claude Code (<persisted-output>): целиком в файл, модели начало, конец и путь.
+# Каждый символ результата остаётся в истории до конца разговора и читается движком заново на каждом новом
+# куске промпта, поэтому порог ниже, чем у Claude Code (30000): HTML на 30K символов это 13-17K токенов на шаг,
+# и 32 таких шага заполнили 320K контекста.
+INLINE_MAX = int(os.environ.get("INKLING_TOOL_INLINE_MAX") or 8000)    # до стольких символов результат идёт целиком
+PREVIEW_HEAD, PREVIEW_TAIL = 2000, 1000                                 # превью сохранённого результата
+LINE_MAX = 2000                                                          # read_file режет строки длиннее этого
+RESULTS = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "inkling" / "tool-results"
+RESULTS_KEEP_DAYS = 7
 
 
 def state() -> dict:
@@ -59,10 +72,57 @@ def preview(text: str, limit: int) -> str:
     return text[:limit] + f"\n... [НЕ ПОКАЗАНО ещё {len(text) - limit} символов: проверьте в чате или откажите]"
 
 
-def clip(text: str, limit: int = MAX_OUT) -> str:
-    if len(text) <= limit:
+def cut_at_line(text: str, n: int, from_end: bool = False) -> str:
+    """Первые (или последние) n символов, по границе строки, если она не дальше половины (как v0e в Claude Code)."""
+    if len(text) <= n:
         return text
-    return text[:limit] + f"\n... [обрезано: показано {limit} из {len(text)} символов]"
+    if from_end:
+        part = text[-n:]
+        i = part.find("\n")
+        return part[i + 1:] if 0 <= i < n // 2 else part
+    part = text[:n]
+    i = part.rfind("\n")
+    return part[:i] if i > n // 2 else part
+
+
+_seq = 0
+
+
+def persist(text: str, tool: str, head: str = "") -> str:
+    """Результат длиннее INLINE_MAX: весь текст в файл, модели путь, начало и конец. head (код выхода) идёт первой строкой."""
+    global _seq
+    if len(text) <= INLINE_MAX:
+        return head + text
+    _seq += 1
+    now = datetime.datetime.now()
+    day = RESULTS / now.strftime("%Y-%m-%d")
+    path = day / f"{now.strftime('%H%M%S')}-{os.getpid()}-{_seq}-{tool}.txt"
+    try:
+        day.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="")
+        where = f"Полностью сохранён в файл: {path}"
+    except OSError as e:                   # не сохранили: модель хотя бы видит начало и конец
+        where = f"Сохранить в файл не удалось ({e}), остальное недоступно"
+    lines = text.count("\n") + 1
+    start = cut_at_line(text, PREVIEW_HEAD)
+    end = cut_at_line(text[len(start):], PREVIEW_TAIL, from_end=True)
+    skipped = len(text) - len(start) - len(end)
+    return (f"{head}<persisted-output>\nРезультат слишком большой ({len(text)} символов, {lines} строк). {where}\n"
+            f"Начало:\n{start}\n[... пропущено {skipped} символов ...]\nКонец:\n{end}\n"
+            f"Остальное: read_file этого файла с offset/limit или grep_search по нему.\n</persisted-output>")
+
+
+def cleanup_results() -> None:
+    """Папки результатов старше RESULTS_KEEP_DAYS удаляются при запуске сервера инструментов."""
+    try:
+        old = (datetime.date.today() - datetime.timedelta(days=RESULTS_KEEP_DAYS)).isoformat()
+        for d in RESULTS.iterdir():
+            if d.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d.name) and d.name < old:
+                for f in d.iterdir():
+                    f.unlink()
+                d.rmdir()
+    except OSError:
+        pass
 
 
 def read_text(p: Path) -> str:
@@ -100,11 +160,25 @@ def t_read_file(a: dict) -> str:
     lines = read_text(p).splitlines()
     start = max(1, int(a.get("offset") or 1))
     limit = int(a.get("limit") or 2000)
-    chunk = lines[start - 1:start - 1 + limit]
-    body = "\n".join(f"{i}\t{line}" for i, line in enumerate(chunk, start))
-    more = len(lines) - (start - 1 + len(chunk))
-    tail = f"\n... [ещё {more} строк, читайте с offset={start + len(chunk)}]" if more > 0 else ""
-    return clip(f"{p} ({len(lines)} строк)\n{body}{tail}")
+    # Не больше INLINE_MAX символов за вызов (как PARTIAL view в Claude Code): дальше модель читает со следующего offset.
+    # Файл и так на диске, копия не нужна.
+    out, size, cut = [], 0, 0
+    for i, line in enumerate(lines[start - 1:start - 1 + limit], start):
+        if len(line) > LINE_MAX:
+            line, cut = line[:LINE_MAX] + f" ... [строка обрезана: {len(line)} символов]", cut + 1
+        row = f"{i}\t{line}"
+        if out and size + len(row) + 1 > INLINE_MAX:
+            break
+        out.append(row)
+        size += len(row) + 1
+    nxt = start + len(out)
+    more = len(lines) - (nxt - 1)
+    note = ""
+    if more > 0:
+        note = f"\n... [ЧАСТЬ ФАЙЛА: показаны строки {start}-{nxt - 1}, ещё {more}; читайте с offset={nxt}]"
+    if cut:
+        note += f"\n[{cut} длинных строк обрезано до {LINE_MAX} символов; ищите в них через grep_search]"
+    return f"{p} ({len(lines)} строк)\n" + "\n".join(out) + note
 
 
 def walk(base: Path, deadline: float):
@@ -143,7 +217,7 @@ def t_glob(a: dict) -> str:
                 out.append(str(f))
     if len(out) > 500:
         out, note = out[:500], "\n... [показаны первые 500]"
-    return clip(("\n".join(out) if out else f"ничего не найдено: {pattern} в {base}") + note)
+    return persist(("\n".join(out) if out else f"ничего не найдено: {pattern} в {base}") + note, "glob")
 
 
 def t_grep(a: dict) -> str:
@@ -171,8 +245,8 @@ def t_grep(a: dict) -> str:
             if rx.search(line):
                 hits.append(f"{f}:{i}: {line.strip()[:300]}")
                 if len(hits) >= 300:
-                    return clip("\n".join(hits) + "\n... [показаны первые 300 совпадений]")
-    return clip("\n".join(hits) if hits else "совпадений нет")
+                    return persist("\n".join(hits) + "\n... [показаны первые 300 совпадений]", "grep")
+    return persist("\n".join(hits) if hits else "совпадений нет", "grep")
 
 
 def t_write(a: dict) -> str:
@@ -215,13 +289,13 @@ def t_exec(a: dict) -> str:
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", errors="replace")
-        return clip(f"error: команда не уложилась в {timeout} с\n{out}")
+        return persist(out, "exec", f"error: команда не уложилась в {timeout} с\n")
     out = r.stdout.decode("utf-8", errors="replace")
     err = r.stderr.decode("utf-8", errors="replace")
-    res = f"код выхода {r.returncode}\n{out}"
+    res = out
     if err.strip():
         res += f"\n[stderr]\n{err}"
-    return clip(res)
+    return persist(res, "exec", f"код выхода {r.returncode}\n")
 
 
 def t_info(a: dict) -> str:
@@ -291,6 +365,7 @@ def call(name: str, args: dict) -> dict:
 
 
 def main() -> None:
+    cleanup_results()
     out = sys.stdout.buffer
     for raw in sys.stdin.buffer:
         try:
