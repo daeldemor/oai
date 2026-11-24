@@ -24,7 +24,7 @@ index 814f034..06bd5b1 100644
                  if not self._authorized():
                      return
 diff --git a/serve/web/app.js b/serve/web/app.js
-index f9b8f39..9ae3e17 100644
+index f9b8f39..1878e94 100644
 --- a/serve/web/app.js
 +++ b/serve/web/app.js
 @@ -365,7 +365,8 @@ function render(m) {
@@ -242,7 +242,70 @@ index f9b8f39..9ae3e17 100644
  }, true);
  
  function apiMessages() {
-@@ -1432,7 +1576,7 @@ async function generateReply(opts = {}) {
+@@ -1295,7 +1439,7 @@ function assistantMessages(m) {
+               tool_calls: calls.map((t) => ({id: t.id, type: "function", function: {name: t.name, arguments: JSON.stringify(t.arguments || {})}}))});
+     for (const t of calls) {
+       const pictures = t.vision ? (t.images || []).filter((im) => safeToolMedia(im.url)) : [];
+-      const content = pictures.length ? [{type: "text", text: t.result}, ...pictures.map((im) =>
++      const content = t.pruned ? prunedNote(t) : pictures.length ? [{type: "text", text: t.result}, ...pictures.map((im) =>
+         ({type: "image_url", image_url: {url: "strata-tool-media:" + im.url.split("/").pop()}}))] : t.result;
+       out.push({role: "tool", tool_call_id: t.id, content});
+     }
+@@ -1306,6 +1450,53 @@ function assistantMessages(m) {
+   return out;
+ }
+ 
++// OAI patch: a long chat with tools outgrows the context, and the server never truncates a request. Before a request, once the
++// history the model reads is estimated past PRUNE_AT of the context, the oldest tool results are replaced by a short note
++// (the page still shows them) until it is down to PRUNE_TO. The prompt changes only at such a step, so between steps the
++// conversation cache keeps working. A request refused for overflow is cut down the same way and asked again once.
++const PRUNE_AT = 0.75, PRUNE_TO = 0.5, PRUNE_KEEP = 4;
++const prunedNote = (t) => `[Старый результат инструмента убран из истории, чтобы разговор уместился в контекст (было ${t.result.length} символов). Если он снова нужен, вызовите инструмент ещё раз.]`;
++const historyChars = (list) => JSON.stringify(list).length;
++// tokens per character of history: from the last answer that reported its prompt, else ~2.5 characters a token
++function tokensPerChar() {
++  for (let i = messages.length - 1; i >= 0; i--) {
++    const m = messages[i];
++    if (m.promptTokens > 0 && m.historyChars > 0) return m.promptTokens / m.historyChars;
++  }
++  return 0.4;
++}
++// marks the oldest results pruned until the estimate is under `target` tokens; returns how many
++function pruneHistory(target, ratio = tokensPerChar()) {
++  const ctx = health.max_context || 0;
++  if (!ctx) return 0;
++  let est = historyChars(apiMessages()) * ratio;
++  if (target == null) { if (est <= PRUNE_AT * ctx) return 0; target = PRUNE_TO * ctx; }
++  const live = [];
++  for (const m of messages) if (m.role === "assistant" && !(busy && busy.msg === m))
++    for (const t of m.tools || []) if (t.round != null && t.result != null && t.state !== "skipped" && !t.pruned) live.push(t);
++  let n = 0;
++  for (const t of live.slice(0, Math.max(live.length - PRUNE_KEEP, 0))) {
++    if (est <= target) break;
++    est -= Math.max(historyChars(t.result) - historyChars(prunedNote(t)), 0) * ratio;
++    t.pruned = true;
++    n++;
++  }
++  return n;
++}
++// after "request exceeds the context window: prompt (N tokens)": prune with the ratio that request showed.
++// "retry": nothing of the answer came, ask again; "pruned": the next message fits; false: nothing to prune
++function pruneAfterOverflow(m, sent, mayRetry) {
++  const x = /exceeds the context window.*?prompt \((\d+) tokens\)/.exec(m.error || "");
++  if (!x) return false;
++  const turn = assistantMessages(m);
++  m.promptTokens = +x[1];
++  m.historyChars = historyChars(sent) + historyChars(turn);
++  const n = pruneHistory(PRUNE_TO * (health.max_context || 0), m.promptTokens / m.historyChars);
++  if (!n) return false;
++  m.prunedNow = n;
++  return mayRetry && !m.text && !(m.tools || []).some((t) => t.round != null) ? "retry" : "pruned";
++}
++
+ function busyHint() {
+   const mode = settings.whileBusy;
+   return mode === "queue" ? tr("composer.hintQueue", "Enter sends when the answer is done")
+@@ -1432,10 +1623,12 @@ async function generateReply(opts = {}) {
    renderChat();
    const el = $("chat").lastElementChild;
    const controller = new AbortController();
@@ -251,27 +314,62 @@ index f9b8f39..9ae3e17 100644
    setBusy(true);
    paintLive();
  
-@@ -1453,6 +1597,7 @@ async function generateReply(opts = {}) {
++  const pruned = pruneHistory();
++  if (pruned) toast("info", tr("chat.prunedTitle", "History shortened"), tr("chat.pruned", "{n} old tool results were left out of what the model reads, so the chat fits the context.", {n: pruned}), 6000);
+   const body = {model: health.model, messages: finishing ? finishMessages(m) : apiMessages(), stream: true,
+                 reasoning_effort: finishing ? "none" : settings.thinking};
+   if (!(settings.temperature > 0)) {
+@@ -1452,7 +1645,8 @@ async function generateReply(opts = {}) {
+   if (projectionLoaded()) body.experimental_speed_projection = !!settings.esp;
    if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
  
-   let firstAt = null, thinkStart = null, usage = null, frame = 0;
+-  let firstAt = null, thinkStart = null, usage = null, frame = 0;
++  let firstAt = null, thinkStart = null, usage = null, frame = 0, overflow = false;
 +  const sentAt = performance.now();                    // OAI patch: the wait for the first token goes into the stats
    const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
    try {
      const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true), body: JSON.stringify(body),
-@@ -1518,6 +1663,12 @@ async function generateReply(opts = {}) {
+@@ -1504,7 +1698,12 @@ async function generateReply(opts = {}) {
+     }
+   } catch (e) {
+     if (e.name === "AbortError") m.stopped = true;
+-    else { m.error = e.message || String(e); toast("error", tr("toast.requestFailed", "The request failed"), m.error, 6000); }
++    else {
++      m.error = e.message || String(e);
++      overflow = pruneAfterOverflow(m, body.messages, !finishing && !opts.retried);
++      if (overflow === "retry") toast("info", tr("chat.prunedTitle", "History shortened"), tr("chat.prunedRetry", "The chat outgrew the context: {n} old tool results were left out of what the model reads. Asking again.", {n: m.prunedNow}), 6000);
++      else toast("error", tr("toast.requestFailed", "The request failed"), overflow ? `${m.error}\n\n${tr("chat.prunedNext", "{n} old tool results were left out of what the model reads: send the message again.", {n: m.prunedNow})}` : m.error, overflow ? 12000 : 6000);
++    }
+   }
+   const cut = busy.cut;                                      // an interjection ended it: kept as written, marked interrupted
+   if (cut) m.interrupted = true;
+@@ -1518,6 +1717,14 @@ async function generateReply(opts = {}) {
    } else if (m.stopped) {
      m.meta = cut ? tr("chat.interrupted", "Interrupted") : tr("chat.stopped", "Stopped");
    }
 +  // OAI patch: llama-ui style figures - how long the first token took, and the last prompt with its cached share
 +  if (firstAt) m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.firstToken", "first token in {s} s", {s: fmt((firstAt - sentAt) / 1000, 1)})}`;
-+  if (usage && usage.prompt_tokens) {
++  if (usage && usage.prompt_tokens) {             // the last round's prompt: the history sent and this turn up to it
++    m.promptTokens = usage.prompt_tokens;
++    m.historyChars = historyChars(body.messages) + historyChars(assistantMessages(m));
 +    const cached = (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0;
 +    m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.promptCached", "prompt {n} tokens, {pct}% cached", {n: fmt(usage.prompt_tokens), pct: Math.round(100 * cached / usage.prompt_tokens)})}`;
 +  }
    for (const t of m.tools || []) if (t.state === "writing" || t.state === "running") { t.state = "skipped"; t.ms = null; }
    const ran = (m.tools || []).filter((t) => t.state === "done" || t.state === "error").length;
    if (ran) m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.toolCalls", {one: "{n} tool call", other: "{n} tool calls"}, {n: ran})}`;
+@@ -1528,6 +1735,11 @@ async function generateReply(opts = {}) {
+   paintLive();
+   if (frame) cancelAnimationFrame(frame);
+   updateAssistant(el, m, false);
++  if (overflow === "retry") {
++    messages.splice(messages.indexOf(m), 1);
++    saveChat();
++    return generateReply({retried: true});
++  }
+   saveChat();
+   scrollDown();
+   settlePending(cut, !m.stopped && !m.error);
 diff --git a/serve/web/app.css b/serve/web/app.css
 index cd9140c..980cfca 100644
 --- a/serve/web/app.css
@@ -321,7 +419,7 @@ index cd9140c..980cfca 100644
 +  .cursor::after, .tool-call .st-badge::before { animation: none; }
 +}
 diff --git a/serve/web/locales/ru.json b/serve/web/locales/ru.json
-index 7146eb1..3816c52 100644
+index 7146eb1..5593d8b 100644
 --- a/serve/web/locales/ru.json
 +++ b/serve/web/locales/ru.json
 @@ -14,6 +14,10 @@
@@ -393,7 +491,7 @@ index 7146eb1..3816c52 100644
    "hist.lostText": "Браузер сохранил только имена, без содержимого. Начните новый чат и прикрепите их снова.",
    "hist.lostText2": "Браузер сохранил только имена, без содержимого. Прикрепите их снова.",
    "hist.lostTitle": "Вложения нужно добавить заново",
-@@ -135,6 +165,18 @@
+@@ -135,6 +165,22 @@
    "hist.rewind": "Вернуться сюда",
    "hist.rewindTitle": "Вернуться к этому месту в чате",
    "hist.save": "Сохранить",
@@ -401,6 +499,10 @@ index 7146eb1..3816c52 100644
 +  "live.queued": "Ждёт в очереди",
 +  "live.reading": "Читает промпт · {n} токенов",
 +  "live.readingPct": "Читает промпт · {pct}% · {read} из {total} токенов",
++  "chat.prunedTitle": "История сокращена",
++  "chat.pruned": "Из того, что читает модель, убраны старые результаты инструментов ({n}), чтобы чат уместился в контекст.",
++  "chat.prunedRetry": "Чат перерос контекст: из того, что читает модель, убраны старые результаты инструментов ({n}). Запрос отправлен ещё раз.",
++  "chat.prunedNext": "Из того, что читает модель, убраны старые результаты инструментов ({n}): отправьте сообщение ещё раз.",
 +  "live.readingNew": "Читает промпт · {pct}% · {read} из {total} новых токенов · {cached} из кэша",
 +  "live.thinking": "Размышляет",
 +  "live.tokens": "{n} ток.",
@@ -412,7 +514,7 @@ index 7146eb1..3816c52 100644
    "math.source": "Исходный текст формулы ({reason})",
    "model.alreadyUnloaded": "Уже выгружена",
    "model.busy": "Модель занята",
-@@ -207,7 +249,16 @@
+@@ -207,7 +253,16 @@
    "sidebar.delete": "Удалить этот чат",
    "sidebar.deleteShort": "Удалить",
    "sidebar.expand": "Открыть список чатов",
@@ -430,7 +532,7 @@ index 7146eb1..3816c52 100644
    "sidebar.nameFor": "Название этого чата",
    "sidebar.noMatch": "Подходящих чатов нет",
    "sidebar.none": "Чатов пока нет",
-@@ -246,12 +297,5 @@
+@@ -246,12 +301,5 @@
    "tool.running": "Выполняется",
    "tool.skipped": "Не выполнен",
    "tool.writing": "Пишется",
