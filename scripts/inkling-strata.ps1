@@ -1,6 +1,6 @@
 ﻿# Общие функции лаунчеров Inkling на Strata (подключается через точку: . scripts\inkling-strata.ps1).
 # Сервер: Strata control (python -m serve.server) + наш патченый движок strata-ink-build\strata-inkling.exe.
-# Режимы: 320k (эксперты 5.6 ГиБ в VRAM) и 128k (7.6 ГиБ, всё быстрее). Веб-чат на том же порту, инструменты
+# Режимы: 320k (эксперты 6.0 ГиБ в VRAM) и 128k (8.0 ГиБ, всё быстрее). Веб-чат на том же порту, инструменты
 # ему даёт scripts\inkling_mcp.py (MCP). API-ключа нет: Strata без ключа сама отклоняет запросы чужих веб-страниц
 # (Origin) и DNS rebinding (Host), а инструменты MCP разрешает только со своей страницы.
 # Файл в UTF-8 с BOM: без BOM Windows PowerShell 5.1 читает кириллицу как ANSI.
@@ -18,8 +18,10 @@ $InkCuda    = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5\bin\x64'
 $InkLlamaExe = Join-Path $InkRoot 'llama.cpp-src\build\bin\llama-server.exe'
 
 $InkModes = @{
-    '320k' = @{ Ctx = 327680; Vram = '5.6' }
-    '128k' = @{ Ctx = 131072; Vram = '7.6' }
+    # с STRATA_INK_HOST_EMBED эмбеддинги (0.86 ГиБ) в RAM, VRAM под экспертов на 0.4 ГиБ больше; 6.4 на 320K
+    # тормозило генерацию в конце контекста (VRAM впритык), поэтому запас оставлен
+    '320k' = @{ Ctx = 327680; Vram = '6.0' }
+    '128k' = @{ Ctx = 131072; Vram = '8.0' }
 }
 
 function Get-StrataControl {
@@ -42,8 +44,10 @@ function Write-InkRunConfig([string]$Mode) {
         args      = @('--native', $InkModel, '--max-context', "$($m.Ctx)", '--kv', 'k8v4', '--kv-offload', 'off',
                       '--vram-experts-gb', $m.Vram)
         # PIN_FRAC: эксперты в закреплённой RAM (prefill вдвое быстрее); KV_PREALLOC: весь KV сразу (иначе рост
-        # упирается в VRAM около 180K); TRIM_WS: после загрузки отпустить отображение GGUF (~11 ГБ RAM)
-        env       = [ordered]@{ STRATA_INK_PIN_FRAC = '0.6'; STRATA_INK_KV_PREALLOC = '1'; STRATA_INK_TRIM_WS = '1' }
+        # упирается в VRAM около 180K); TRIM_WS: после загрузки отпустить отображение GGUF (~11 ГБ RAM);
+        # HOST_EMBED: таблица эмбеддингов в закреплённой RAM, освободившаяся VRAM идёт экспертам
+        env       = [ordered]@{ STRATA_INK_PIN_FRAC = '0.6'; STRATA_INK_KV_PREALLOC = '1'; STRATA_INK_TRIM_WS = '1'
+                                STRATA_INK_HOST_EMBED = '1' }
         lib_dirs  = @($InkCuda)
         tokenizer = $InkTok
         model_name = 'inkling'

@@ -1,3 +1,16 @@
+diff --git a/engine/src/inkling2/cuda/ink_dspark.cuh b/engine/src/inkling2/cuda/ink_dspark.cuh
+index f28ed564d..d2bdf4eeb 100644
+--- a/engine/src/inkling2/cuda/ink_dspark.cuh
++++ b/engine/src/inkling2/cuda/ink_dspark.cuh
+@@ -1480,7 +1480,7 @@ struct InkDSpark {
+         const int B = kInkDsparkBlock;  // 8
+         const auto& ei = m.tinfo("model.llm.embed.weight");
+         k_ink_embed_norm<<<1, 256, 0, r.st>>>(
+-            m.d_trunk + ei.off, ei.fmt,
++            m.embed_ptr(), ei.fmt,
+             (const float*)m.trunk_ptr("model.llm.embed_norm.weight"),
+             d_anchor_id, nullptr, nullptr, d_cur, 1, kInkHidden);
+         const float* mask_e = (const float*)m.trunk_ptr("dspark.mask_embed");
 diff --git a/engine/src/inkling2/cuda/ink_hybrid.cuh b/engine/src/inkling2/cuda/ink_hybrid.cuh
 index 5cbbab34c..c4a95ef83 100644
 --- a/engine/src/inkling2/cuda/ink_hybrid.cuh
@@ -18,10 +31,29 @@ index 5cbbab34c..c4a95ef83 100644
          const bool try_pin = (avail == 0 || (double)bytes < 0.45 * (double)avail);
  #endif
 diff --git a/engine/src/inkling2/cuda/ink_runner.cuh b/engine/src/inkling2/cuda/ink_runner.cuh
-index 5cce0a823..855bafa5d 100644
+index 5cce0a823..d24df6c06 100644
 --- a/engine/src/inkling2/cuda/ink_runner.cuh
 +++ b/engine/src/inkling2/cuda/ink_runner.cuh
-@@ -937,6 +937,8 @@ struct InkCudaModel {
+@@ -239,6 +239,8 @@ struct InkCudaModel {
+     bool trunk_attn_fp16 = false;  // true on sm_70/75: .attn.* BF16 weights converted in-place to FP16 at load!
+ 
+     uint8_t* d_trunk = nullptr;
++    uint8_t* h_embed = nullptr;        // STRATA_INK_HOST_EMBED: token embedding in mapped pinned RAM
++    const uint8_t* d_embed = nullptr;  // its device-side address (nullptr: the embedding is in d_trunk)
+     uint8_t* d_sec4  = nullptr;
+     uint8_t* d_sec4_peer = nullptr;
+     uint8_t* h_sec4_pinned = nullptr;  // optional pinned overflow for 8/12/16 GB GPUs
+@@ -267,6 +269,9 @@ struct InkCudaModel {
+     const uint8_t* trunk_ptr(const std::string& name) const {
+         return d_trunk + man.get(name).off;
+     }
++    const uint8_t* embed_ptr() const {
++        return d_embed ? d_embed : d_trunk + man.get("model.llm.embed.weight").off;
++    }
+     const uint8_t* trunk_ptr_stage(int s, const std::string& name) const {
+         if (!ls_active || s <= 0) return d_trunk + man.get(name).off;
+         auto it = stage_trunk_off[s].find(name);
+@@ -937,6 +942,8 @@ struct InkCudaModel {
              ti.shape = kv.second.shape;
              ti.off = kv.second.off;
              ti.bytes = kv.second.bytes;
@@ -30,7 +62,45 @@ index 5cce0a823..855bafa5d 100644
              man.dspark[kv.first] = std::move(ti);
          }
  
-@@ -1569,6 +1571,15 @@ struct InkCudaModel {
+@@ -944,6 +951,37 @@ struct InkCudaModel {
+         double t0 = now_s();
+         std::vector<uint8_t> sec1;
+         if (!mf.read_section1(sec1, err)) return false;
++        // STRATA_INK_HOST_EMBED=1 (opt-in): the BF16 token embedding (0.86 GiB) goes to mapped pinned RAM instead of
++        // VRAM. A token reads one 4.6 KB row of it over PCIe; the freed VRAM is left for experts and KV.
++        // The table is cut out of the trunk and the offsets after it move down by its size.
++        if (const char* he = std::getenv("STRATA_INK_HOST_EMBED"); he && std::atoi(he) > 0 && !ls_active) {
++            auto eit = man.trunk.find("model.llm.embed.weight");
++            if (eit != man.trunk.end() && eit->second.bytes > 0 && eit->second.bytes % 256 == 0 &&
++                eit->second.off + eit->second.bytes <= sec1.size()) {
++                const size_t eo = eit->second.off, eb = eit->second.bytes;
++                void* h = nullptr;
++                void* dp = nullptr;
++                if (cudaHostAlloc(&h, eb, cudaHostAllocMapped) == cudaSuccess &&
++                    cudaHostGetDevicePointer(&dp, h, 0) == cudaSuccess) {
++                    std::memcpy(h, sec1.data() + eo, eb);
++                    sec1.erase(sec1.begin() + eo, sec1.begin() + eo + eb);
++                    auto shift = [&](auto& mp) {
++                        for (auto& kv : mp)
++                            if (kv.second.off >= eo + eb) kv.second.off -= eb;
++                    };
++                    shift(man.trunk);
++                    shift(man.dspark);
++                    h_embed = static_cast<uint8_t*>(h);
++                    d_embed = static_cast<const uint8_t*>(dp);
++                    std::fprintf(stderr, "[InkCUDA] token embedding in mapped pinned RAM (%.2f GiB of VRAM saved)\n",
++                                 (double)eb / 1073741824.0);
++                } else {
++                    if (h) cudaFreeHost(h);
++                    (void)cudaGetLastError();
++                    std::fprintf(stderr, "[InkCUDA] STRATA_INK_HOST_EMBED: pinned allocation failed, embedding stays in VRAM\n");
++                }
++            }
++        }
+         trunk_bytes = sec1.size();
+         INK_CK(cudaMalloc(&d_trunk, std::max<size_t>(256, trunk_bytes)));
+         if (trunk_bytes > 0) INK_CK(cudaMemcpy(d_trunk, sec1.data(), trunk_bytes, cudaMemcpyHostToDevice));
+@@ -1569,6 +1607,15 @@ struct InkCudaModel {
                           n_vram_experts, primary_gpu, n_peer_experts, peer_gpu, n_host_experts, t_exp,
                           (int)ep2_active, (int)ep2_p2p, (int)hybrid.active, (int)sm120::available());
          }
@@ -46,7 +116,15 @@ index 5cce0a823..855bafa5d 100644
          return true;
      }
  
-@@ -1977,6 +1988,9 @@ struct InkCudaRunner {
+@@ -1617,6 +1664,7 @@ struct InkCudaModel {
+         if (d_sec4) { cudaFree(d_sec4); d_sec4 = nullptr; }
+         if (h_sec4_pinned) { cudaFreeHost(h_sec4_pinned); h_sec4_pinned = nullptr; }
+         if (d_trunk) { cudaFree(d_trunk); d_trunk = nullptr; }
++        if (h_embed) { cudaFreeHost(h_embed); h_embed = nullptr; d_embed = nullptr; }
+     }
+ };
+ 
+@@ -1977,6 +2025,9 @@ struct InkCudaRunner {
                               (int)kv_dtype, kv_host_ctx, (double)((size_t)kv_host_ctx * per_pos_all_glob) / (1024.0 * 1024.0));
              } else if (vram_fit_ctx >= max_ctx) {
                  kv_dev_ctx = std::max(256, std::min(max_ctx, (max_slots == 1) ? 8192 : 4096));
@@ -56,7 +134,7 @@ index 5cce0a823..855bafa5d 100644
                  kv_host_ctx = 0;
                  kv_alloc_ctx = kv_dev_ctx;
              } else if (kv_offload_mode == 0 && host_fit_ctx >= 256) {
-@@ -2001,6 +2015,9 @@ struct InkCudaRunner {
+@@ -2001,6 +2052,9 @@ struct InkCudaRunner {
                      max_ctx = clamped;
                  }
                  kv_dev_ctx = std::max(256, std::min(max_ctx, (max_slots == 1) ? 8192 : 4096));
@@ -66,3 +144,12 @@ index 5cce0a823..855bafa5d 100644
                  kv_host_ctx = 0;
                  kv_alloc_ctx = kv_dev_ctx;
              }
+@@ -3252,7 +3306,7 @@ struct InkCudaRunner {
+         const size_t n_hid = (size_t)M * kInkHidden;
+         const auto& ei = m.tinfo("model.llm.embed.weight");
+         k_ink_embed_norm<<<M, 256, 0, st>>>(
+-            m.d_trunk + ei.off, ei.fmt,
++            m.embed_ptr(), ei.fmt,
+             (const float*)m.trunk_ptr("model.llm.embed_norm.weight"),
+             d_tok_ids, has_img_step ? d_is_img : nullptr, has_img_step ? d_img_emb : nullptr, d_cur, M, kInkHidden);
+ 
