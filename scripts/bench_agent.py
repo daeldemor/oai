@@ -220,7 +220,7 @@ def timings(resp, engine):
             "prompt_ms": t.get("prompt_ms"), "gen_n": t.get("predicted_n"), "gen_ms": t.get("predicted_ms")}
 
 
-def run_turn(messages, tools, engine, deadline, log):
+def run_turn(messages, tools, engine, deadline, log, root: Path):
     """Один ход пользователя: шаги модели с инструментами до текстового ответа. Возвращает ответ."""
     for rnd in range(MAX_ROUNDS):
         if time.time() > deadline:
@@ -256,7 +256,13 @@ def run_turn(messages, tools, engine, deadline, log):
             key = name + json.dumps(args, sort_keys=True, ensure_ascii=False)
             log["repeats"] += key in log["_seen"]
             log["_seen"].append(key)
-            out = M.call(name, args)
+            # запись и правка - только внутри копии проекта (команды PowerShell так не ограничить: задачи стенда без сети
+            # и безобидные, но изоляции у стенда нет, запускать его только на своих задачах)
+            target = args.get("path") if name in ("write_file", "edit_file") else None
+            if target is not None and not Path(os.path.realpath(M.resolve(target))).is_relative_to(os.path.realpath(root)):
+                out = M.result(f"error: запись вне папки проекта {root} запрещена в стенде")
+            else:
+                out = M.call(name, args)
             text = out["content"][0]["text"]
             messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": ("error: " + text) if out["isError"] else text})
     log["max_rounds"] = True
@@ -287,7 +293,7 @@ def run_task(name, prompts, checks, engine, work: Path, pad: int = 0):
         messages.append({"role": "user", "content": prompt})
         log = {"rounds": [], "errors": [], "length": 0, "repeats": 0, "_seen": [], "timeout": False, "max_rounds": False}
         ts = time.time()
-        ans = run_turn(messages, tools, engine, deadline, log)
+        ans = run_turn(messages, tools, engine, deadline, log, root)
         ok, why = check(root, ans, facts)
         log["calls"] = [k[:160] for k in log.pop("_seen")]
         rec["turns"].append({"ok": ok, "why": why, "secs": round(time.time() - ts, 1), "answer": ans[:400], **log})

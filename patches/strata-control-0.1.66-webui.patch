@@ -24,7 +24,7 @@ index 814f034..06bd5b1 100644
                  if not self._authorized():
                      return
 diff --git a/serve/web/app.js b/serve/web/app.js
-index f9b8f39..ded8b3c 100644
+index f9b8f39..429fa70 100644
 --- a/serve/web/app.js
 +++ b/serve/web/app.js
 @@ -376,6 +376,7 @@ function render(m) {
@@ -35,16 +35,19 @@ index f9b8f39..ded8b3c 100644
    if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
    if (tab === "monitor") renderConvCache(m.conversation_cache);
    if (tab === "about") renderAbout(eng, hw, st);
-@@ -1044,6 +1045,8 @@ function msgEl(m, i) {
+@@ -1044,7 +1045,10 @@ function msgEl(m, i) {
    } else {
      el.innerHTML = `<details class="st-collapse think" hidden><summary>${icon("thinking", "st-icon st-icon--sm")}<span class="think-title"></span>` +
        `${icon("chevron", "st-icon st-icon--sm st-chev")}</summary><div class="st-collapse__body thinking"></div></details>` +
+-      `<div class="st-bubble"></div><div class="st-msg__meta"><span class="meta-text"></span>` +
++      `<div class="st-bubble"></div>` +
 +      `<div class="live-status" hidden><span class="live-status__dot"></span><span class="live-status__text"></span>` +
 +      `<span class="live-status__bar" hidden><span></span></span></div>` +
-       `<div class="st-bubble"></div><div class="st-msg__meta"><span class="meta-text"></span>` +
++      `<div class="st-msg__meta"><span class="meta-text"></span>` +
        `<button class="st-btn st-btn--secondary msg-finish" type="button" data-msg-finish hidden ` +
        `title="${esc(tr("chat.finishFromThinkingTitle", "Write an answer from what the model worked out before you stopped it. It doesn't think any further."))}">` +
-@@ -1141,6 +1144,89 @@ function onTool(m, x) {
+       `${esc(tr("chat.finishFromThinking", "Answer from this thinking"))}</button>` +
+@@ -1141,6 +1145,131 @@ function onTool(m, x) {
                        state: x.skipped ? "skipped" : x.ok ? "done" : "error"});
    }
  }
@@ -62,9 +65,32 @@ index f9b8f39..ded8b3c 100644
 +  body._n = text.length;
 +  if (atEnd) body.scrollTop = body.scrollHeight;
 +}
++// Split an answer into sections that markdown() renders the same alone as together: a cut goes only at a blank line
++// outside a code block, before a heading or a ``` fence or after a closed one. Fences are matched as markdown() does.
++function mdBlocks(text) {
++  if (!text) return [];
++  const out = [];
++  let cur = [], fence = false, prevBlank = false, afterFence = false;
++  for (const line of text.split("\n")) {
++    const blank = !line.trim();
++    const open = !fence && /^```[^`]*$/.test(line);
++    if (!fence && prevBlank && cur.length && !blank && (open || afterFence || /^#{1,6}\s/.test(line))) {
++      out.push(cur.join("\n"));
++      cur = [];
++    }
++    if (!blank) afterFence = false;
++    cur.push(line);
++    if (open) fence = true;
++    else if (fence && /^```[ \t]*$/.test(line)) { fence = false; afterFence = true; }
++    prevBlank = blank;
++  }
++  out.push(cur.join("\n"));
++  return out;
++}
 +function answerParts(m) {
 +  const parts = [];
-+  const seg = (text, key) => { if (text) parts.push({key, sig: text, html: () => answerMarkdown(text)}); };
++  // each Markdown section is its own part: while streaming only the last one is rebuilt, the rest keep their DOM
++  const seg = (text, key) => { mdBlocks(text).forEach((b, j) => parts.push({key: `${key}.${j}`, sig: b, html: () => answerMarkdown(b)})); };
 +  if (!m.tools || !m.tools.length) { seg(m.text || "", "t"); return parts; }
 +  let pos = 0;
 +  m.tools.forEach((t, k) => {
@@ -78,6 +104,24 @@ index f9b8f39..ded8b3c 100644
 +  seg(m.text.slice(pos), "t$");
 +  return parts;
 +}
++// A code block still being written only grows: put the new text into its <code> and keep the block, its header and
++// buttons (rebuilding them on every token made the icons and the scroll jitter). Same text as markdown() would give.
++function openCode(sig) {
++  const nl = sig.indexOf("\n");
++  if (nl < 0 || !/^```[^`]*$/.test(sig.slice(0, nl))) return null;
++  const body = sig.slice(nl + 1);
++  if (/(^|\n)```[ \t]*(\n|$)/.test(body)) return null;
++  return {head: sig.slice(0, nl), body};
++}
++function growCode(o, p) {
++  if (settings.math) return false;
++  const a = openCode(o.sig), b = openCode(p.sig);
++  const code = o.node.querySelector(".st-code pre > code");
++  if (!a || !b || a.head !== b.head || !code || o.node.querySelectorAll(".st-code").length !== 1) return false;
++  code.textContent = b.body;
++  o.sig = p.sig;
++  return true;
++}
 +function paintAnswer(bubble, m) {
 +  const parts = answerParts(m);
 +  if (!bubble._parts) { bubble.textContent = ""; bubble._parts = []; }
@@ -85,6 +129,7 @@ index f9b8f39..ded8b3c 100644
 +  parts.forEach((p, i) => {
 +    const o = old[i];
 +    if (o && o.key === p.key && o.sig === p.sig) return;
++    if (o && o.key === p.key && growCode(o, p)) return;
 +    const node = document.createElement("div");
 +    node.className = "ans-part";
 +    node.innerHTML = p.html();
@@ -134,7 +179,7 @@ index f9b8f39..ded8b3c 100644
  function updateAssistant(el, m, streaming) {
    const det = el.querySelector("details.think");
    if (m.reasoning) {
-@@ -1149,7 +1235,7 @@ function updateAssistant(el, m, streaming) {
+@@ -1149,7 +1278,7 @@ function updateAssistant(el, m, streaming) {
      el.querySelector(".think-title").textContent = thinkingNow ? tr("think.now", "Thinking…") :
        m.thinkSecs != null ? tr("think.for", "Thought for {s} s", {s: fmt(m.thinkSecs, 1)}) : tr("think.done", "Thoughts");
      const body = el.querySelector(".thinking");
@@ -143,7 +188,7 @@ index f9b8f39..ded8b3c 100644
      else body.dataset.pending = "1";
      // open while it streams (if wanted), closed once the answer starts - unless the user toggled it themselves
      if (thinkingNow && settings.show && !det.dataset.touched && !det.open) { det._auto = true; det.open = true; }
-@@ -1157,16 +1243,17 @@ function updateAssistant(el, m, streaming) {
+@@ -1157,16 +1286,17 @@ function updateAssistant(el, m, streaming) {
    }
    const bubble = el.querySelector(".st-bubble");
    if (m.error) {
@@ -165,7 +210,7 @@ index f9b8f39..ded8b3c 100644
    el.querySelector(".meta-text").textContent = m.meta || (streaming ? "" : m.stopped ? tr("chat.stopped", "Stopped") : "");
    el.querySelector("[data-msg-copy]").hidden = streaming || !m.text;
    const finish = el.querySelector("[data-msg-finish]");
-@@ -1257,7 +1344,7 @@ $("chat").addEventListener("toggle", (e) => {
+@@ -1257,7 +1387,7 @@ $("chat").addEventListener("toggle", (e) => {
    if (d._auto) { d._auto = false; return; }          // our own open/close, not the user's
    d.dataset.touched = "1";
    const body = d.querySelector(".thinking");
@@ -174,7 +219,7 @@ index f9b8f39..ded8b3c 100644
  }, true);
  
  function apiMessages() {
-@@ -1432,7 +1519,7 @@ async function generateReply(opts = {}) {
+@@ -1432,7 +1562,7 @@ async function generateReply(opts = {}) {
    renderChat();
    const el = $("chat").lastElementChild;
    const controller = new AbortController();
@@ -183,7 +228,7 @@ index f9b8f39..ded8b3c 100644
    setBusy(true);
    paintLive();
  
-@@ -1453,6 +1540,7 @@ async function generateReply(opts = {}) {
+@@ -1453,6 +1583,7 @@ async function generateReply(opts = {}) {
    if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
  
    let firstAt = null, thinkStart = null, usage = null, frame = 0;
@@ -191,7 +236,7 @@ index f9b8f39..ded8b3c 100644
    const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
    try {
      const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true), body: JSON.stringify(body),
-@@ -1518,6 +1606,12 @@ async function generateReply(opts = {}) {
+@@ -1518,6 +1649,12 @@ async function generateReply(opts = {}) {
    } else if (m.stopped) {
      m.meta = cut ? tr("chat.interrupted", "Interrupted") : tr("chat.stopped", "Stopped");
    }
