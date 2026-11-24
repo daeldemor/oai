@@ -1,3 +1,15 @@
+diff --git a/engine/src/inkling2/cuda/ink_cuda_backend.cu b/engine/src/inkling2/cuda/ink_cuda_backend.cu
+index bb9b32261..0328f046a 100644
+--- a/engine/src/inkling2/cuda/ink_cuda_backend.cu
++++ b/engine/src/inkling2/cuda/ink_cuda_backend.cu
+@@ -87,6 +87,7 @@ public:
+             st.vram_experts_loaded = model_.n_vram_experts + model_.n_peer_experts;
+             st.ram_experts_loaded  = model_.n_host_experts;
+             st.total_experts       = model_.n_vram_experts + model_.n_peer_experts + model_.n_host_experts;
++            st.vram_expert_bytes   = model_.sec4_bytes + model_.sec4_peer_bytes;
+             size_t vf = 0, vt = 0;
+             if (cudaMemGetInfo(&vf, &vt) == cudaSuccess) {
+                 st.vram_total_bytes = vt;
 diff --git a/engine/src/inkling2/cuda/ink_dspark.cuh b/engine/src/inkling2/cuda/ink_dspark.cuh
 index f28ed564d..d2bdf4eeb 100644
 --- a/engine/src/inkling2/cuda/ink_dspark.cuh
@@ -153,3 +165,188 @@ index 5cce0a823..d24df6c06 100644
              (const float*)m.trunk_ptr("model.llm.embed_norm.weight"),
              d_tok_ids, has_img_step ? d_is_img : nullptr, has_img_step ? d_img_emb : nullptr, d_cur, M, kInkHidden);
  
+diff --git a/engine/src/inkling2/ink_backend.h b/engine/src/inkling2/ink_backend.h
+index e8b05e78c..b4d9dd993 100644
+--- a/engine/src/inkling2/ink_backend.h
++++ b/engine/src/inkling2/ink_backend.h
+@@ -41,6 +41,7 @@ struct BackendStats {
+     size_t vram_experts_loaded = 0;
+     size_t ram_experts_loaded = 0;
+     size_t total_experts = 0;
++    size_t vram_expert_bytes = 0;  // experts resident in VRAM (the INFO line reports it for the Monitor)
+     size_t vram_used_bytes = 0;
+     size_t vram_total_bytes = 0;
+     int active_slots = 0;
+diff --git a/engine/src/inkling2/ink_serve.h b/engine/src/inkling2/ink_serve.h
+index 6cbb1e8c8..5c7846a11 100644
+--- a/engine/src/inkling2/ink_serve.h
++++ b/engine/src/inkling2/ink_serve.h
+@@ -445,6 +445,51 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend&
+     const int chunk_sz = std::max(1, cfg.bopts.chunk);
+     const bool use_dspark = (cfg.draft_mode != "off") && mf.m.dspark.present && backend.dspark_ready();
+ 
++    // STRATA_INK_LOOKUP=K (opt-in, K = 1..15 draft tokens): prompt-lookup drafting for a single stream without DSpark.
++    // The draft is the text that followed the latest earlier occurrence of the last N tokens (STRATA_INK_LOOKUP_N,
++    // 2..3, default 3) anywhere in the prompt or the answer so far. It costs no VRAM: an exact n-gram index in RAM
++    // (3 tokens of 21 bits make one 63-bit key), rebuilt per request.
++    const int lookup_k = [] {
++        const char* e = std::getenv("STRATA_INK_LOOKUP");
++        return e ? std::max(0, std::min(15, std::atoi(e))) : 0;
++    }();
++    const int lookup_n = [] {
++        const char* e = std::getenv("STRATA_INK_LOOKUP_N");
++        return e ? std::max(2, std::min(3, std::atoi(e))) : 3;
++    }();
++    // STRATA_INK_LOOKUP_COOL=E (0..5, default 0 = off): after misses in a row pause drafting for 2, 4, .. 2^E tokens.
++    const int lookup_cool = [] {
++        const char* e = std::getenv("STRATA_INK_LOOKUP_COOL");
++        return e ? std::max(0, std::min(5, std::atoi(e))) : 0;
++    }();
++    struct LookupIdx {
++        std::unordered_map<uint64_t, int> last;  // n-gram -> position of its last token (latest occurrence)
++        size_t upto = 0;                          // n-grams ending before this position are indexed
++        int len = 0;                              // adaptive draft length: 1 after a miss, doubles after a full hit
++        int misses = 0;                           // drafts in a row with nothing accepted
++        int cool = 0;                             // tokens to decode without drafting (STRATA_INK_LOOKUP_COOL)
++    };
++    std::vector<LookupIdx> lookup(P);
++    auto lookup_key = [&](const std::vector<int32_t>& h, size_t end) -> uint64_t {
++        uint64_t k = 0;
++        for (int i = lookup_n - 1; i >= 0; --i) k = (k << 21) | (uint64_t)((uint32_t)h[end - i] & 0x1FFFFFu);
++        return k;
++    };
++    auto lookup_draft = [&](int slot, const std::vector<int32_t>& h, int max_d, int32_t* out) -> int {
++        auto& L = lookup[slot];
++        const size_t n = h.size();
++        if (max_d <= 0 || n < (size_t)lookup_n + 1) return 0;
++        if (L.last.empty()) L.last.reserve(n + 4096);
++        if (L.upto < (size_t)lookup_n - 1) L.upto = (size_t)lookup_n - 1;
++        // index every n-gram that ends before the last token, so the current suffix never matches itself
++        for (; L.upto + 1 < n; ++L.upto) L.last[lookup_key(h, L.upto)] = (int)L.upto;
++        const auto it = L.last.find(lookup_key(h, n - 1));
++        if (it == L.last.end()) return 0;
++        int nd = 0;
++        for (size_t j = (size_t)it->second + 1; j < n && nd < max_d; ++j) out[nd++] = h[j];
++        return nd;
++    };
++
+     // Probe Vision shard lazily (zero VRAM/RAM until first image request)
+     bool images_ok = false;
+     VisionShardInfo vprobe;
+@@ -482,6 +527,12 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend&
+           mf.m.dspark.present ? "dspark" : "none",
+           use_dspark ? "dspark" : "off",
+           images_ok ? 1 : 0, c.image_token_id, kMaxParallelSlots);
++    {
++        // The Monitor's "Experts in VRAM" reads expert_slots / expert_cache_mib from INFO (the Qwen engine sends them).
++        const BackendStats bst = backend.stats();
++        proto("INFO expert_slots=%zu expert_slots_full=%zu expert_cache_mib=%zu lookup=%d lookup_n=%d lookup_cool=%d",
++              bst.vram_experts_loaded, bst.total_experts, bst.vram_expert_bytes >> 20, lookup_k, lookup_n, lookup_cool);
++    }
+     proto("READY %d stop hold holdb", eff_max_ctx);
+ 
+     std::vector<ActiveReq> reqs(P);
+@@ -621,6 +672,7 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend&
+         rq.prefill_pos = reuse;
+         rq.cur_pos = reuse;
+         rq.hist = rq.prompt_ids;
++        if (rq.slot >= 0 && rq.slot < P) lookup[rq.slot] = LookupIdx{};
+         rq.next_tok = -1;
+         return true;
+     };
+@@ -880,6 +932,95 @@ inline int run_serve_loop(const ServeConfig& cfg, InkModelFile& mf, InkBackend&
+             }
+         }
+ 
++        // 2b. STRATA_INK_LOOKUP: prompt-lookup draft, verified like a DSpark draft (snapshot, one forward, rollback).
++        if (lookup_k > 0 && !use_dspark && n_active == 1 && reqs[sole_slot].prefill_pos >= reqs[sole_slot].prompt_len &&
++            reqs[sole_slot].generated + 2 <= reqs[sole_slot].max_new &&
++            reqs[sole_slot].cur_pos + lookup_k + 1 < eff_max_ctx &&
++            !reqs[sole_slot].hist.empty() && reqs[sole_slot].hist.back() == reqs[sole_slot].next_tok &&
++            (lookup[reqs[sole_slot].slot].cool <= 0 || (--lookup[reqs[sole_slot].slot].cool, false))) {
++            auto& rq = reqs[sole_slot];
++            int32_t draft_ids[16]{};
++            auto& lk = lookup[rq.slot];
++            if (lk.len <= 0) lk.len = lookup_k;
++            const int max_d = std::min(lk.len, rq.max_new - rq.generated - 1);
++            const int nd = lookup_draft(rq.slot, rq.hist, max_d, draft_ids);
++            const int acc0 = rq.drafts_accepted;
++            if (nd > 0) {
++                backend.snapshot_slot(rq.slot);
++                batch.clear();
++                batch.capture_taps = false;
++                batch.push(rq.slot, rq.cur_pos, rq.next_tok, true);
++                for (int i = 0; i < nd; ++i) {
++                    batch.push(rq.slot, rq.cur_pos + 1 + i, draft_ids[i], true);
++                }
++                logits_buf.resize(static_cast<size_t>(nd + 1) * V);
++                std::string ferr;
++                if (!backend.forward_batch(batch, logits_buf.data(), nullptr, ferr)) {
++                    proto("ERR fatal GPU error: %s", ferr.c_str());
++                    return 1;
++                }
++                rq.drafts_offered += nd;
++                int accepted = 0;
++                bool done = false;
++                const char* fin = nullptr;
++                for (int i = 0; i <= nd; ++i) {
++                    float* lg = logits_buf.data() + static_cast<size_t>(i) * V;
++                    if (!finite_logits(lg, V)) {
++                        // Never leave poisoned KV/ShortConv prefix cached across retries (#879)!
++                        rq.cached_prefix.clear();
++                        rq.prompt_ckpt_prefix.clear();
++                        backend.reset_slot(rq.slot);
++                        finish_req(rq, "nonfinite");
++                        done = true;
++                        break;
++                    }
++                    bool draft_ok = false;
++                    int32_t tok = (i < nd)
++                        ? verify_draft_logits(lg, V, rq.s, rq.hist, rq.rng, draft_ids[i], draft_ok)
++                        : sample_logits(lg, V, rq.s, rq.hist, rq.rng);
++                    rq.hist.push_back(tok);
++                    rq.gen_ids.push_back(tok);
++                    rq.cached_prefix.push_back(i == 0 ? rq.next_tok : draft_ids[i - 1]);
++                    ++rq.generated;
++                    if (rq.is_solo) proto("T %d", tok);
++                    else if (rq.is_ext_gen) proto("T %s %d", rq.req_id.c_str(), tok);
++                    else proto("BT %d %d", rq.slot, tok);
++
++                    if (is_stop_tok(tok)) { fin = "stop"; done = true; ++accepted; break; }
++                    if (rq.generated >= rq.max_new) { fin = "length"; done = true; ++accepted; break; }
++                    if (cfg.anti_loop && detect_repetition_loop(rq.gen_ids)) { fin = "stop"; done = true; ++accepted; break; }
++                    if (i < nd && draft_ok) {
++                        ++accepted;
++                        ++rq.drafts_accepted;
++                    } else {
++                        rq.next_tok = tok;
++                        ++accepted;
++                        break;
++                    }
++                }
++                if (!done) {
++                    if (accepted <= nd) {
++                        // Rolled back to anchor + accepted tokens
++                        backend.rollback_slot(rq.slot, rq.cur_pos + accepted);
++                    }
++                    rq.cur_pos += accepted;
++                } else if (fin) {
++                    finish_req(rq, fin);
++                }
++                const int acc = rq.drafts_accepted - acc0;
++                lk.len = (acc >= nd) ? std::min(lookup_k, std::max(1, lk.len) * 2) : std::max(1, acc + 1);
++                // a miss costs a wider forward for one token; optionally pause drafting after misses in a row (deep
++                // context: common n-grams match often and the drafts are wrong). Measured: it cost more than it saved.
++                if (acc == 0 && lookup_cool > 0) {
++                    lk.misses = std::min(lk.misses + 1, lookup_cool);
++                    lk.cool = 1 << lk.misses;
++                } else if (acc > 0) {
++                    lk.misses = 0;
++                }
++                continue;
++            }
++        }
++
+         // 3. Continuous Batched 48-Visit Step across ALL active slots (B = 1..64)!
+         // Coalesces chunked-prefill tokens + decode tokens from every active request into ONE StepBatch!
+         batch.clear();

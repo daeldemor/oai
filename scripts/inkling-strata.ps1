@@ -45,9 +45,10 @@ function Write-InkRunConfig([string]$Mode) {
                       '--vram-experts-gb', $m.Vram)
         # PIN_FRAC: эксперты в закреплённой RAM (prefill вдвое быстрее); KV_PREALLOC: весь KV сразу (иначе рост
         # упирается в VRAM около 180K); TRIM_WS: после загрузки отпустить отображение GGUF (~11 ГБ RAM);
-        # HOST_EMBED: таблица эмбеддингов в закреплённой RAM, освободившаяся VRAM идёт экспертам
+        # HOST_EMBED: таблица эмбеддингов в закреплённой RAM, освободившаяся VRAM идёт экспертам;
+        # LOOKUP: черновик из уже написанного текста до 7 токенов (копирование кода +40–50%, глубокий пересказ −9%)
         env       = [ordered]@{ STRATA_INK_PIN_FRAC = '0.6'; STRATA_INK_KV_PREALLOC = '1'; STRATA_INK_TRIM_WS = '1'
-                                STRATA_INK_HOST_EMBED = '1' }
+                                STRATA_INK_HOST_EMBED = '1'; STRATA_INK_LOOKUP = '7' }
         lib_dirs  = @($InkCuda)
         tokenizer = $InkTok
         model_name = 'inkling'
