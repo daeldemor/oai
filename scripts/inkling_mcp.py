@@ -107,6 +107,8 @@ def persist(text: str, tool: str, head: str = "") -> str:
     start = cut_at_line(text, PREVIEW_HEAD)
     end = cut_at_line(text[len(start):], PREVIEW_TAIL, from_end=True)
     skipped = len(text) - len(start) - len(end)
+    # вывод чужой (страница, файл): его «</persisted-output>» не должен закрывать наш блок раньше времени
+    start, end = (re.sub(r"<(/?)persisted-output", r"<\1persisted-output_", s, flags=re.I) for s in (start, end))
     return (f"{head}<persisted-output>\nРезультат слишком большой ({len(text)} символов, {lines} строк). {where}\n"
             f"Начало:\n{start}\n[... пропущено {skipped} символов ...]\nКонец:\n{end}\n"
             f"Остальное: read_file этого файла с offset/limit или grep_search по нему.\n</persisted-output>")
@@ -114,13 +116,22 @@ def persist(text: str, tool: str, head: str = "") -> str:
 
 def cleanup_results() -> None:
     """Папки результатов старше RESULTS_KEEP_DAYS удаляются при запуске сервера инструментов."""
+    # Только свои файлы: без ссылок и junction (они могли бы увести удаление в чужую папку), имена как у persist().
     try:
         old = (datetime.date.today() - datetime.timedelta(days=RESULTS_KEEP_DAYS)).isoformat()
+        root = RESULTS.resolve()
         for d in RESULTS.iterdir():
-            if d.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d.name) and d.name < old:
-                for f in d.iterdir():
+            if (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d.name) or d.name >= old or d.is_symlink()
+                    or not d.is_dir() or d.resolve().parent != root):
+                continue
+            for f in d.iterdir():
+                if (re.fullmatch(r"\d{6}-\d+-\d+-[a-z_]+\.txt", f.name) and not f.is_symlink() and f.is_file()
+                        and f.resolve().parent == d.resolve()):
                     f.unlink()
-                d.rmdir()
+            try:
+                d.rmdir()                 # только если папка опустела
+            except OSError:
+                pass
     except OSError:
         pass
 
