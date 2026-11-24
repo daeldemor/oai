@@ -1,0 +1,365 @@
+diff --git a/serve/server.py b/serve/server.py
+index 814f034..06bd5b1 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -6918,6 +6918,20 @@ def make_handler(svc: Service):
+             path = self.path.split("?")[0].rstrip("/")
+             if path.startswith("/v1/") and self._foreign_page(body=False):
+                 return
++            if path == "/service-worker.js":
++                # OAI patch: llama.cpp's web UI on this same address registered a service worker that can keep showing
++                # its cached page instead of this one. The browser re-fetches the script to update it: this one removes
++                # itself and reloads the open tabs, so the next visit gets this server's page.
++                body = (b"self.addEventListener('install',()=>self.skipWaiting());"
++                        b"self.addEventListener('activate',e=>e.waitUntil(self.registration.unregister()"
++                        b".then(()=>self.clients.matchAll({type:'window'})).then(cs=>cs.forEach(c=>c.navigate(c.url)))));")
++                self.send_response(200)
++                self.send_header("Content-Type", "text/javascript; charset=utf-8")
++                self.send_header("Cache-Control", "no-store")
++                self.send_header("Content-Length", str(len(body)))
++                self.end_headers()
++                self.wfile.write(body)
++                return
+             if path.startswith("/tool-media/"):
+                 if not self._authorized():
+                     return
+diff --git a/serve/web/app.js b/serve/web/app.js
+index f9b8f39..ded8b3c 100644
+--- a/serve/web/app.js
++++ b/serve/web/app.js
+@@ -376,6 +376,7 @@ function render(m) {
+   }
+   modelButton(live);
+   if (!modelOp && !localLoad && live.queued > 0) setPill("queued", tr("pill.queued", "{n} queued", {n: live.queued}));
++  if (busy && busy.el && busy.el.isConnected) paintStatus(busy.el, busy.msg, true);   // OAI patch: the reply's live status
+   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
+   if (tab === "monitor") renderConvCache(m.conversation_cache);
+   if (tab === "about") renderAbout(eng, hw, st);
+@@ -1044,6 +1045,8 @@ function msgEl(m, i) {
+   } else {
+     el.innerHTML = `<details class="st-collapse think" hidden><summary>${icon("thinking", "st-icon st-icon--sm")}<span class="think-title"></span>` +
+       `${icon("chevron", "st-icon st-icon--sm st-chev")}</summary><div class="st-collapse__body thinking"></div></details>` +
++      `<div class="live-status" hidden><span class="live-status__dot"></span><span class="live-status__text"></span>` +
++      `<span class="live-status__bar" hidden><span></span></span></div>` +
+       `<div class="st-bubble"></div><div class="st-msg__meta"><span class="meta-text"></span>` +
+       `<button class="st-btn st-btn--secondary msg-finish" type="button" data-msg-finish hidden ` +
+       `title="${esc(tr("chat.finishFromThinkingTitle", "Write an answer from what the model worked out before you stopped it. It doesn't think any further."))}">` +
+@@ -1141,6 +1144,89 @@ function onTool(m, x) {
+                       state: x.skipped ? "skipped" : x.ok ? "done" : "error"});
+   }
+ }
++// OAI patch: smooth streaming. Each frame used to set the whole thinking text again (tens of thousands of characters)
++// and rebuild the whole answer (Markdown and every tool block), so a long reply stuttered and an opened tool block
++// closed again. Now the thinking text is appended and the answer keeps every part that did not change.
++function setThinking(body, text) {
++  const n = body._n;
++  const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 24;   // follow the end unless the reader scrolled up
++  if (n != null && text.length >= n && body.childNodes.length < 2000) {
++    if (text.length > n) body.appendChild(document.createTextNode(text.slice(n)));
++  } else {
++    body.textContent = text;
++  }
++  body._n = text.length;
++  if (atEnd) body.scrollTop = body.scrollHeight;
++}
++function answerParts(m) {
++  const parts = [];
++  const seg = (text, key) => { if (text) parts.push({key, sig: text, html: () => answerMarkdown(text)}); };
++  if (!m.tools || !m.tools.length) { seg(m.text || "", "t"); return parts; }
++  let pos = 0;
++  m.tools.forEach((t, k) => {
++    const at = Math.min(Math.max(t.at || 0, pos), m.text.length);
++    if (at > pos) seg(m.text.slice(pos, at), `t${k}`);
++    pos = at;
++    const sig = [t.state, t.open ? 1 : 0, t.ms, t.result == null ? -1 : t.result.length, t.name, t.server,
++                 t.arguments == null ? -1 : JSON.stringify(t.arguments).length, (t.images || []).length].join("|");
++    parts.push({key: `x${k}`, sig, html: () => toolHtml(t, k) + toolImages(t)});
++  });
++  seg(m.text.slice(pos), "t$");
++  return parts;
++}
++function paintAnswer(bubble, m) {
++  const parts = answerParts(m);
++  if (!bubble._parts) { bubble.textContent = ""; bubble._parts = []; }
++  const old = bubble._parts;
++  parts.forEach((p, i) => {
++    const o = old[i];
++    if (o && o.key === p.key && o.sig === p.sig) return;
++    const node = document.createElement("div");
++    node.className = "ans-part";
++    node.innerHTML = p.html();
++    hydrateToolImages(node);
++    if (settings.math) StrataMath.hydrate(node);
++    if (o) bubble.replaceChild(node, o.node); else bubble.appendChild(node);
++    old[i] = {key: p.key, sig: p.sig, node};
++  });
++  while (old.length > parts.length) bubble.removeChild(old.pop().node);
++}
++// what the model is doing right now, in the reply itself (the header pill is easy to miss): reading the prompt with
++// a progress bar, thinking or writing with the speed, a tool running with its time
++function paintStatus(el, m, streaming) {
++  const box = el.querySelector(".live-status");
++  if (!box) return;
++  if (!streaming) { box.hidden = true; return; }
++  const live = (lastMetrics && lastMetrics.live) || {};
++  const running = (m.tools || []).find((t) => t.state === "running");
++  let text, pct = null;
++  if (running) {
++    running.t0 = running.t0 || Date.now();
++    text = tr("live.tool", "Running {name} · {s} s", {name: running.tool || running.name || "tool", s: fmt((Date.now() - running.t0) / 1000, 0)});
++  } else if (live.state === "reading") {
++    if (live.prompt_total) {
++      pct = live.prompt_read / live.prompt_total;
++      text = tr("live.readingPct", "Reading the prompt · {pct}% · {read} of {total} tokens",
++                {pct: Math.round(100 * pct), read: fmt(live.prompt_read), total: fmt(live.prompt_total)});
++    } else {
++      text = tr("live.reading", "Reading the prompt · {n} tokens", {n: fmt(live.prompt_tokens || 0)});
++    }
++  } else if (live.state === "generating") {
++    const ph = live.phase || "";
++    const what = ph === "thinking" ? tr("live.thinking", "Thinking") : ph === "answering" ? tr("live.answering", "Writing the answer")
++      : tr("live.toolCall", "Writing a tool call");
++    text = `${what} · ${tr("live.tokens", "{n} tokens", {n: fmt(live.generated || 0)})}` + (live.tok_s ? ` · ${fmt(live.tok_s, 1)} ${tr("live.tps", "tok/s")}` : "");
++  } else if (live.queued > 0) {
++    text = tr("live.queued", "Waiting in the queue");
++  } else {
++    text = tr("live.waiting", "Waiting for the server…");
++  }
++  box.hidden = false;
++  box.querySelector(".live-status__text").textContent = text;
++  const bar = box.querySelector(".live-status__bar");
++  bar.hidden = pct == null;
++  if (pct != null) bar.firstChild.style.width = `${Math.min(100, Math.round(100 * pct))}%`;
++}
+ function updateAssistant(el, m, streaming) {
+   const det = el.querySelector("details.think");
+   if (m.reasoning) {
+@@ -1149,7 +1235,7 @@ function updateAssistant(el, m, streaming) {
+     el.querySelector(".think-title").textContent = thinkingNow ? tr("think.now", "Thinking…") :
+       m.thinkSecs != null ? tr("think.for", "Thought for {s} s", {s: fmt(m.thinkSecs, 1)}) : tr("think.done", "Thoughts");
+     const body = el.querySelector(".thinking");
+-    if (det.open || thinkingNow) body.textContent = m.reasoning;
++    if (det.open || thinkingNow) setThinking(body, m.reasoning);
+     else body.dataset.pending = "1";
+     // open while it streams (if wanted), closed once the answer starts - unless the user toggled it themselves
+     if (thinkingNow && settings.show && !det.dataset.touched && !det.open) { det._auto = true; det.open = true; }
+@@ -1157,16 +1243,17 @@ function updateAssistant(el, m, streaming) {
+   }
+   const bubble = el.querySelector(".st-bubble");
+   if (m.error) {
++    bubble._parts = null;
+     bubble.innerHTML = `<div class="msg-error"></div>`;
+     bubble.firstChild.textContent = m.error;
+   } else if (!m.text && streaming && !(m.tools && m.tools.length)) {
+-    bubble.innerHTML = m.reasoning ? `<span class="muted cursor">Writing</span>` : `<span class="cursor"></span>`;
++    bubble._parts = null;
++    bubble.innerHTML = m.reasoning ? `<span class="muted cursor">${esc(tr("live.writing", "Writing"))}</span>` : `<span class="cursor"></span>`;
+   } else {
+-    bubble.innerHTML = answerHtml(m);
+-    hydrateToolImages(bubble);
+-    if (settings.math) StrataMath.hydrate(bubble);
++    paintAnswer(bubble, m);
+     if (streaming) bubble.classList.add("cursor"); else bubble.classList.remove("cursor");
+   }
++  paintStatus(el, m, streaming);
+   el.querySelector(".meta-text").textContent = m.meta || (streaming ? "" : m.stopped ? tr("chat.stopped", "Stopped") : "");
+   el.querySelector("[data-msg-copy]").hidden = streaming || !m.text;
+   const finish = el.querySelector("[data-msg-finish]");
+@@ -1257,7 +1344,7 @@ $("chat").addEventListener("toggle", (e) => {
+   if (d._auto) { d._auto = false; return; }          // our own open/close, not the user's
+   d.dataset.touched = "1";
+   const body = d.querySelector(".thinking");
+-  if (d.open && body.dataset.pending) { body.textContent = messages[+d.closest(".st-msg").dataset.i].reasoning; delete body.dataset.pending; }
++  if (d.open && body.dataset.pending) { setThinking(body, messages[+d.closest(".st-msg").dataset.i].reasoning); delete body.dataset.pending; }
+ }, true);
+ 
+ function apiMessages() {
+@@ -1432,7 +1519,7 @@ async function generateReply(opts = {}) {
+   renderChat();
+   const el = $("chat").lastElementChild;
+   const controller = new AbortController();
+-  busy = {controller, msg: m, cut: false, cutAfterTool: false};
++  busy = {controller, msg: m, el, cut: false, cutAfterTool: false};
+   setBusy(true);
+   paintLive();
+ 
+@@ -1453,6 +1540,7 @@ async function generateReply(opts = {}) {
+   if (settings.mcp !== false && mcpInfo.tools > 0) body.strata_mcp = true;   // this server may run MCP tools for it
+ 
+   let firstAt = null, thinkStart = null, usage = null, frame = 0;
++  const sentAt = performance.now();                    // OAI patch: the wait for the first token goes into the stats
+   const paint = () => { frame = 0; updateAssistant(el, m, true); scrollDown(); };
+   try {
+     const r = await fetch("v1/chat/completions", {method: "POST", headers: headers(true), body: JSON.stringify(body),
+@@ -1518,6 +1606,12 @@ async function generateReply(opts = {}) {
+   } else if (m.stopped) {
+     m.meta = cut ? tr("chat.interrupted", "Interrupted") : tr("chat.stopped", "Stopped");
+   }
++  // OAI patch: llama-ui style figures - how long the first token took, and the last prompt with its cached share
++  if (firstAt) m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.firstToken", "first token in {s} s", {s: fmt((firstAt - sentAt) / 1000, 1)})}`;
++  if (usage && usage.prompt_tokens) {
++    const cached = (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0;
++    m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.promptCached", "prompt {n} tokens, {pct}% cached", {n: fmt(usage.prompt_tokens), pct: Math.round(100 * cached / usage.prompt_tokens)})}`;
++  }
+   for (const t of m.tools || []) if (t.state === "writing" || t.state === "running") { t.state = "skipped"; t.ms = null; }
+   const ran = (m.tools || []).filter((t) => t.state === "done" || t.state === "error").length;
+   if (ran) m.meta = `${m.meta ? `${m.meta} · ` : ""}${tr("chat.toolCalls", {one: "{n} tool call", other: "{n} tool calls"}, {n: ran})}`;
+diff --git a/serve/web/app.css b/serve/web/app.css
+index cd9140c..289adcb 100644
+--- a/serve/web/app.css
++++ b/serve/web/app.css
+@@ -375,3 +375,31 @@ a.st-header__brand:hover { color: var(--st-accent-text); text-decoration: none;
+ /* a message may use the room a wide window gives the chat column (#3176 widened the column; the kit's 720px kept the messages narrow in it) */
+ .st-msg { max-width: min(100%, 900px); }
+ .st-toast .st-btn { white-space: nowrap; }
++
++/* ---- OAI patch: smoother chat and a llama-ui look (G:\Work\OAI\patches\strata-control-0.1.66-webui.patch) ---- */
++[data-theme="dark"]{--st-bg:#121212;--st-surface:#1a1a1a;--st-surface-2:#202020;--st-line:#2d2d2d;--st-line-soft:#252525;
++  --st-ink:#ececec;--st-ink-soft:#d4d4d4;--st-ink-muted:#9b9b9b;--st-icon:#cfcfcf}
++.chat { max-width: min(100%, 900px); }
++.st-composer { max-width: min(100%, 900px); }
++.st-msg { max-width: 100%; }
++.st-msg--user { max-width: 80%; }
++.st-msg--user .st-bubble { background: var(--st-surface-2); color: var(--st-ink); border: 1px solid var(--st-line); border-radius: 18px; }
++.st-msg--assistant .st-bubble { background: transparent; border: 0; padding: 2px 2px 4px; }
++.ans-part { display: contents; }
++.st-bubble > .ans-part:first-child > :first-child { margin-top: 0; }
++.st-bubble > .ans-part:last-child > :last-child { margin-bottom: 0; }
++.st-bubble .tool-call { margin: 6px 0; border-radius: 10px; background: var(--st-surface); contain: content; }
++.tool-call > summary { padding: 6px 10px; }
++.st-collapse.think { background: var(--st-surface); border-radius: 10px; }
++.st-collapse__body.thinking { font-size: var(--st-fs-sm); color: var(--st-ink-muted); max-height: 300px; contain: content; }
++.st-msg__meta { opacity: .85; }
++/* earlier replies are not laid out while off screen: a long chat stays light */
++.st-msg:not(:last-child) { content-visibility: auto; contain-intrinsic-size: auto 300px; }
++/* what the model is doing now, inside the reply */
++.live-status { display: flex; align-items: center; gap: 8px; font-size: var(--st-fs-sm); color: var(--st-ink-muted); padding: 2px 2px 4px; }
++.live-status[hidden], .live-status__bar[hidden] { display: none; }
++.live-status__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-accent); flex: none; animation: live-pulse 1.2s ease-in-out infinite; }
++.live-status__bar { flex: 1; max-width: 260px; height: 4px; border-radius: 2px; background: var(--st-line); overflow: hidden; }
++.live-status__bar > span { display: block; height: 100%; width: 0; background: var(--st-accent); transition: width .5s linear; }
++@keyframes live-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
++@media (prefers-reduced-motion: reduce) { .live-status__dot { animation: none; } .live-status__bar > span { transition: none; } }
+diff --git a/serve/web/locales/ru.json b/serve/web/locales/ru.json
+index 7146eb1..884e39d 100644
+--- a/serve/web/locales/ru.json
++++ b/serve/web/locales/ru.json
+@@ -14,6 +14,10 @@
+   "chat.deleted": "Чат удалён",
+   "chat.empty": "Спрашивайте что угодно",
+   "chat.emptyModel": "{model} работает на этом ПК. Ничто не уходит наружу.",
++  "chat.finishFromThinking": "Ответить по этим рассуждениям",
++  "chat.finishFromThinkingTitle": "Пишет ответ по тому, что модель успела продумать до остановки. Дальше она не рассуждает.",
++  "chat.firstToken": "первый токен через {s} с",
++  "chat.fromStoppedThinking": "ответ по остановленным рассуждениям",
+   "chat.image": "изображение",
+   "chat.interrupted": "Прервано",
+   "chat.interruptedLower": "прервано",
+@@ -22,10 +26,21 @@
+   "chat.newToastText": "Прежний чат остался в списке слева.",
+   "chat.projectionOff": "проекция выключена",
+   "chat.projectionOn": "проекция включена",
++  "chat.promptCached": "промпт {n} ток., из кэша {pct}%",
+   "chat.stopped": "Остановлено",
+   "chat.stoppedLower": "остановлено",
+-  "chat.tokens": {"one": "{n} токен", "few": "{n} токена", "many": "{n} токенов", "other": "{n} токена"},
+-  "chat.toolCalls": {"one": "{n} вызов инструмента", "few": "{n} вызова инструмента", "many": "{n} вызовов инструмента", "other": "{n} вызова инструмента"},
++  "chat.tokens": {
++    "one": "{n} токен",
++    "few": "{n} токена",
++    "many": "{n} токенов",
++    "other": "{n} токена"
++  },
++  "chat.toolCalls": {
++    "one": "{n} вызов инструмента",
++    "few": "{n} вызова инструмента",
++    "many": "{n} вызовов инструмента",
++    "other": "{n} вызова инструмента"
++  },
+   "chat.toolLimit": "остановлено на пределе в {n} раундов инструментов (mcp.max_rounds)",
+   "chat.untitled": "Новый чат",
+   "chat.you": "Вы",
+@@ -114,15 +129,30 @@
+   "hist.editAnswerTitle": "Исправить текст ответа. Запрос не отправляется.",
+   "hist.editLabel": "Правка ответа",
+   "hist.editNote": "Прежнее рассуждение и вызовы инструментов в ответе удаляются. Запрос не отправляется.",
+-  "hist.editRemoves": {"one": "При сохранении скроется {n} следующее сообщение. ", "few": "При сохранении скроются {n} следующих сообщения. ", "many": "При сохранении скроются {n} следующих сообщений. ", "other": "При сохранении скроются {n} следующих сообщения. "},
++  "hist.editRemoves": {
++    "one": "При сохранении скроется {n} следующее сообщение. ",
++    "few": "При сохранении скроются {n} следующих сообщения. ",
++    "many": "При сохранении скроются {n} следующих сообщений. ",
++    "other": "При сохранении скроются {n} следующих сообщения. "
++  },
+   "hist.edited": "Изменено",
+-  "hist.editedHidden": {"one": "Ответ изменён, скрыто {n} сообщение", "few": "Ответ изменён, скрыто {n} сообщения", "many": "Ответ изменён, скрыто {n} сообщений", "other": "Ответ изменён, скрыто {n} сообщения"},
++  "hist.editedHidden": {
++    "one": "Ответ изменён, скрыто {n} сообщение",
++    "few": "Ответ изменён, скрыто {n} сообщения",
++    "many": "Ответ изменён, скрыто {n} сообщений",
++    "other": "Ответ изменён, скрыто {n} сообщения"
++  },
+   "hist.editedOnly": "Ответ изменён",
+   "hist.empty": "Ответ пуст",
+   "hist.emptyText": "Напишите что-нибудь перед сохранением.",
+   "hist.finishFirst": "Сначала закончите то, что открыто",
+   "hist.finishFirstText": "Сохраните это или нажмите «Отмена».",
+-  "hist.hidden": {"one": "Скрыто {n} сообщение", "few": "Скрыто {n} сообщения", "many": "Скрыто {n} сообщений", "other": "Скрыто {n} сообщения"},
++  "hist.hidden": {
++    "one": "Скрыто {n} сообщение",
++    "few": "Скрыто {n} сообщения",
++    "many": "Скрыто {n} сообщений",
++    "other": "Скрыто {n} сообщения"
++  },
+   "hist.lostText": "Браузер сохранил только имена, без содержимого. Начните новый чат и прикрепите их снова.",
+   "hist.lostText2": "Браузер сохранил только имена, без содержимого. Прикрепите их снова.",
+   "hist.lostTitle": "Вложения нужно добавить заново",
+@@ -135,6 +165,17 @@
+   "hist.rewind": "Вернуться сюда",
+   "hist.rewindTitle": "Вернуться к этому месту в чате",
+   "hist.save": "Сохранить",
++  "live.answering": "Пишет ответ",
++  "live.queued": "Ждёт в очереди",
++  "live.reading": "Читает промпт · {n} токенов",
++  "live.readingPct": "Читает промпт · {pct}% · {read} из {total} токенов",
++  "live.thinking": "Размышляет",
++  "live.tokens": "{n} ток.",
++  "live.tool": "Выполняет {name} · {s} с",
++  "live.toolCall": "Пишет вызов инструмента",
++  "live.tps": "ток/с",
++  "live.waiting": "Ждёт сервер…",
++  "live.writing": "Пишет",
+   "math.source": "Исходный текст формулы ({reason})",
+   "model.alreadyUnloaded": "Уже выгружена",
+   "model.busy": "Модель занята",
+@@ -207,7 +248,16 @@
+   "sidebar.delete": "Удалить этот чат",
+   "sidebar.deleteShort": "Удалить",
+   "sidebar.expand": "Открыть список чатов",
+-  "sidebar.foot": {"one": "{n} чат · хранится в этом браузере", "few": "{n} чата · хранятся в этом браузере", "many": "{n} чатов · хранятся в этом браузере", "other": "{n} чата · хранятся в этом браузере"},
++  "sidebar.foot": {
++    "one": "{n} чат · хранится в этом браузере",
++    "few": "{n} чата · хранятся в этом браузере",
++    "many": "{n} чатов · хранятся в этом браузере",
++    "other": "{n} чата · хранятся в этом браузере"
++  },
++  "sidebar.import": "Вернуть сохранённый чат",
++  "sidebar.importFailed": "Возвращать нечего",
++  "sidebar.importFailedText": "В этом файле нет сообщений чата. Выберите файл, сохранённый через «Сохранить этот чат как Markdown».",
++  "sidebar.imported": "Чат возвращён",
+   "sidebar.nameFor": "Название этого чата",
+   "sidebar.noMatch": "Подходящих чатов нет",
+   "sidebar.none": "Чатов пока нет",
+@@ -246,12 +296,5 @@
+   "tool.running": "Выполняется",
+   "tool.skipped": "Не выполнен",
+   "tool.writing": "Пишется",
+-  "undo": "Отменить",
+-  "sidebar.import": "Вернуть сохранённый чат",
+-  "sidebar.imported": "Чат возвращён",
+-  "sidebar.importFailed": "Возвращать нечего",
+-  "sidebar.importFailedText": "В этом файле нет сообщений чата. Выберите файл, сохранённый через «Сохранить этот чат как Markdown».",
+-  "chat.finishFromThinking": "Ответить по этим рассуждениям",
+-  "chat.finishFromThinkingTitle": "Пишет ответ по тому, что модель успела продумать до остановки. Дальше она не рассуждает.",
+-  "chat.fromStoppedThinking": "ответ по остановленным рассуждениям"
++  "undo": "Отменить"
+ }

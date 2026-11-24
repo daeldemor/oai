@@ -1,5 +1,5 @@
 diff --git a/serve/inkling_dialect.py b/serve/inkling_dialect.py
-index 719d380..e8c6cef 100644
+index 719d380..302f8ac 100644
 --- a/serve/inkling_dialect.py
 +++ b/serve/inkling_dialect.py
 @@ -19,8 +19,16 @@ and multiline code losslessly while reusing all downstream OpenAI / Anthropic /
@@ -71,10 +71,24 @@ index 719d380..e8c6cef 100644
      out["enable_thinking"] = False
      out["reasoning_effort"] = DEFAULT_EFFORT
      return out
-@@ -306,6 +333,11 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+@@ -305,7 +332,25 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+     """Canonicalize assistant tool_call arguments from JSON strings to dicts so Inkling-2-Mini's chat_template.jinja
      never raises `tool call arguments must be a parsed object, not a JSON string`."""
      out = []
++    pending: list[str] = []                 # names of the latest assistant turn's calls, for its tool results
      for m in messages:
++        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls"):
++            pending = [str(((tc or {}).get("function") or {}).get("name") or "") for tc in m["tool_calls"]]
++        elif isinstance(m, dict) and m.get("role") == "tool":
++            name = pending.pop(0) if pending else ""
++            if name and not m.get("name") and not m.get("tool_call_id"):
++                # OAI patch: the server's own MCP rounds add tool results with neither a name nor a call id, so the
++                # template wrote <|message_tool|> with no name. The web page sends the same results with call ids,
++                # which the template turns into <|message_tool|>NAME: the next turn's prompt differed from the cached
++                # one at the first tool result and was read again in full (122K tokens, ~90 s). Name them here.
++                m = {**m, "name": name}
++            out.append(m)
++            continue
 +        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("reasoning_content"):
 +            # OAI patch: past reasoning is shown in the chat but not given back to the model. With it in the history
 +            # the model copied its previous thought word for word and repeated the same tool call (8 identical
@@ -83,7 +97,7 @@ index 719d380..e8c6cef 100644
          if not isinstance(m, dict) or not m.get("tool_calls"):
              out.append(m)
              continue
-@@ -332,6 +364,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
+@@ -332,6 +377,33 @@ def prepare_messages(messages: list[dict]) -> list[dict]:
      return out
  
  
@@ -117,7 +131,7 @@ index 719d380..e8c6cef 100644
  def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False) -> str:
      """Append an explicit non-thinking turn opener to a rendered Inkling-2-Mini prompt (#6612, #6620, #6627).
  
-@@ -345,9 +404,38 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
+@@ -345,9 +417,38 @@ def finish_prompt(prompt: str, *, has_tools: bool = False, forced: bool = False)
        tokens or looping inside hidden thinking.
      Idempotent if the prompt already carries an opener or when a forced tool-call opener will be appended.
      """

@@ -108,7 +108,7 @@ function Start-InkServer([string]$Mode, [scriptblock]$OnWait = $null) {
     $llama = Get-InkLlama
     if ($llama) {                                                                  # старый сервер Inkling на llama.cpp
         $llama | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-        Start-Sleep 3
+        for ($i = 0; $i -lt 20 -and (Get-InkHealth); $i++) { Start-Sleep 1 }   # пока старый сервер ещё отвечает
     }
     if (Get-InkHealth) { return 'Порт 8080 занят другим сервером (Strata с другой моделью?). Остановите его и запустите снова.' }
 
@@ -128,7 +128,7 @@ function Start-InkServer([string]$Mode, [scriptblock]$OnWait = $null) {
     $t0 = Get-Date
     while (((Get-Date) - $t0).TotalSeconds -lt 240) {
         $h = Get-InkHealth
-        if ($h -and $h.loaded) { return $null }
+        if ($h -and $h.loaded -and $h.service -eq 'strata') { return $null }
         if (-not (Get-InkServer)) { break }
         $t1 = Get-Date
         while (((Get-Date) - $t1).TotalMilliseconds -lt 2000) {
